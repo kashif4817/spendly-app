@@ -1,21 +1,28 @@
 {
   "expo": {
-    "name": "my-app",
+    "name": "Spendly",
     "slug": "my-app",
+    "owner": "codeflyx",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
-    "ios": {
-      "icon": "./assets/expo.icon"
+    "runtimeVersion": {
+      "policy": "fingerprint"
     },
+    "updates": {
+      "enabled": true,
+      "url": "https://u.expo.dev/6ac93557-ae8d-49bf-8516-96ab9e3499a8",
+      "fallbackToCacheTimeout": 0,
+      "checkAutomatically": "ON_LOAD"
+    },
+    "ios": {},
     "android": {
+      "package": "com.codeflyx.expensetracker",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/images/adaptive-foreground.png"
       },
       "predictiveBackGestureEnabled": false
     },
@@ -28,15 +35,22 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#FFFFFF",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 180
         }
-      ]
+      ],
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "6ac93557-ae8d-49bf-8516-96ab9e3499a8"
+      }
     }
   }
 }

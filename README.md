@@ -1,56 +1,62 @@
-# Welcome to your Expo app 👋
+# Spendly
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A simple offline-first expense tracker built with [Expo](https://expo.dev) and
+Expo Router. Income and expenses are stored locally on the device with SQLite —
+no account, no server, no network required.
+
+## Features
+
+- Log income and expenses against categories
+- Running balance, plus monthly reports and a bar chart breakdown
+- Full transaction history
+- Light and dark theme, following the system setting
+- Over-the-air updates, so fixes arrive without a reinstall
+
+## Tech
+
+| | |
+| --- | --- |
+| Framework | Expo SDK 54, React Native 0.81 |
+| Routing | Expo Router (typed routes) |
+| Storage | `expo-sqlite`, migrations run on first import |
+| Updates | `expo-updates` (EAS Update) |
+| Language | TypeScript |
 
 ## Get started
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
 ```bash
-npm run reset-project
+npm install
+npx expo start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Then open the app in Expo Go, an emulator, or a development build.
 
-### Other setup steps
+> Expo is pinned to **SDK 54** deliberately — the Play Store build of Expo Go
+> must support the SDK for the plain `npx expo start` workflow to keep working.
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+## Project layout
 
-## Learn more
+```
+src/
+  app/            file-based routes
+    (tabs)/       home, reports, history
+    entry.tsx     add-entry modal
+    _layout.tsx   root layout
+  components/     UI building blocks
+  db/             SQLite setup, migrations, hooks
+  constants/      theme, categories, app settings
+  lib/            date and money helpers
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+To change the currency, edit `CURRENCY` in `src/constants/app.ts` — it's used
+everywhere money is displayed.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## Builds and updates
 
-## Join the community
+```bash
+eas build --platform android --profile preview   # sideloadable APK
+eas update --channel production -m "what changed" # ship JS changes over the air
+```
 
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+See [UPDATES.md](UPDATES.md) for the full OTA setup, the rules about what can
+and can't ship over the air, and troubleshooting.
