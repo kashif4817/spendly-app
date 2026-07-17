@@ -1,16 +1,17 @@
 import { useRouter } from 'expo-router';
-import { FlatList, StyleSheet, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AddButton } from '@/components/add-button';
 import { BalanceCard } from '@/components/balance-card';
+import { BudgetBar } from '@/components/budget-bar';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { TransactionRow } from '@/components/transaction-row';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
-import { getTotals, getTransactionsByDay } from '@/db';
+import { getBudgetProgress, getTotals, getTransactionsByDay, OVERALL_BUDGET } from '@/db';
 import { useCategoryEmoji, useQuery } from '@/db/hooks';
-import { formatRelativeDay, todayKey } from '@/lib/date';
+import { formatMonth, formatRelativeDay, monthEnd, monthStart, todayKey } from '@/lib/date';
 
 export default function TodayScreen() {
   const router = useRouter();
@@ -18,7 +19,10 @@ export default function TodayScreen() {
 
   const entries = useQuery(() => getTransactionsByDay(day), [day]);
   const totals = useQuery(() => getTotals(day, day), [day]);
+  const budgets = useQuery(() => getBudgetProgress(monthStart(day), monthEnd(day)), [day]);
   const emojiFor = useCategoryEmoji();
+
+  const overallBudget = budgets.find((b) => b.category === OVERALL_BUDGET);
 
   return (
     <ThemedView style={styles.container}>
@@ -39,6 +43,17 @@ export default function TodayScreen() {
               <View style={styles.cardWrap}>
                 <BalanceCard label="Today's balance" totals={totals} />
               </View>
+              {overallBudget && (
+                <Pressable onPress={() => router.push('/budgets')}>
+                  <ThemedView type="backgroundElement" style={styles.budgetCard}>
+                    <BudgetBar
+                      label={`🎯  ${formatMonth(day)} budget`}
+                      spent={overallBudget.spent}
+                      budget={overallBudget.budget}
+                    />
+                  </ThemedView>
+                </Pressable>
+              )}
               {entries.length > 0 && (
                 <ThemedText type="smallBold" style={styles.sectionTitle}>
                   Entries
@@ -94,6 +109,11 @@ const styles = StyleSheet.create({
   },
   cardWrap: {
     marginTop: Spacing.three,
+  },
+  budgetCard: {
+    marginTop: Spacing.two,
+    borderRadius: Spacing.four,
+    padding: Spacing.three,
   },
   sectionTitle: {
     marginTop: Spacing.four,

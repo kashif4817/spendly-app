@@ -1,21 +1,33 @@
+import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BalanceCard } from '@/components/balance-card';
 import { HBar, VerticalBars, type VerticalBar } from '@/components/bar-chart';
+import { BudgetBar } from '@/components/budget-bar';
 import { Segmented } from '@/components/segmented';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
-import { getCategoryBreakdown, getDailyTotals, getTotals, type EntryType } from '@/db';
+import {
+  getBudgetProgress,
+  getCategoryBreakdown,
+  getDailyTotals,
+  getTotals,
+  OVERALL_BUDGET,
+  type EntryType,
+} from '@/db';
 import { useCategoryEmoji, useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
 import {
   addDays,
+  formatMonth,
   formatRelativeDay,
   formatWeekRange,
+  monthEnd,
+  monthStart,
   todayKey,
   weekdayLetter,
   weekEnd,
@@ -26,12 +38,17 @@ import { formatMoney, formatSigned } from '@/lib/money';
 type Period = 'daily' | 'weekly';
 
 export default function ReportsScreen() {
+  const router = useRouter();
   const [period, setPeriod] = useState<Period>('daily');
   const [anchor, setAnchor] = useState(todayKey());
   const [breakdown, setBreakdown] = useState<EntryType>('out');
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
   const emojiFor = useCategoryEmoji();
   const theme = useTheme();
+
+  // Budgets always track the current calendar month, whatever period is shown.
+  const today = todayKey();
+  const budgets = useQuery(() => getBudgetProgress(monthStart(today), monthEnd(today)), [today]);
 
   const { start, end } = useMemo(() => {
     if (period === 'daily') return { start: anchor, end: anchor };
@@ -225,6 +242,37 @@ export default function ReportsScreen() {
               ))}
             </View>
           )}
+
+          {/* Monthly budgets */}
+          <View style={styles.budgetHeader}>
+            <ThemedText type="smallBold">Budgets · {formatMonth(today)}</ThemedText>
+            <Pressable onPress={() => router.push('/budgets')} hitSlop={8}>
+              <ThemedText type="smallBold" style={styles.budgetEdit}>
+                {budgets.length > 0 ? 'Edit' : 'Set up'}
+              </ThemedText>
+            </Pressable>
+          </View>
+
+          {budgets.length === 0 ? (
+            <ThemedText type="small" themeColor="textSecondary" style={styles.emptyBreakdown}>
+              Set monthly limits to see how your spending tracks against them.
+            </ThemedText>
+          ) : (
+            <ThemedView type="backgroundElement" style={styles.budgetCard}>
+              {budgets.map((b) => (
+                <BudgetBar
+                  key={b.category || '(overall)'}
+                  label={
+                    b.category === OVERALL_BUDGET
+                      ? '🎯  All spending'
+                      : `${emojiFor(b.category, 'out')}  ${b.category}`
+                  }
+                  spent={b.spent}
+                  budget={b.budget}
+                />
+              ))}
+            </ThemedView>
+          )}
         </ScrollView>
       </SafeAreaView>
     </ThemedView>
@@ -340,5 +388,19 @@ const styles = StyleSheet.create({
   chartHint: {
     textAlign: 'center',
     paddingTop: Spacing.one,
+  },
+  budgetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: Spacing.one,
+  },
+  budgetEdit: {
+    color: '#208AEF',
+  },
+  budgetCard: {
+    borderRadius: Spacing.four,
+    padding: Spacing.four,
+    gap: Spacing.three,
   },
 });

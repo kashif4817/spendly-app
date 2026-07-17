@@ -15,6 +15,11 @@ export default function TabsLayout() {
         <Icon src={<VectorIcon family={MaterialIcons} name="home" />} />
       </NativeTabs.Trigger>
 
+      <NativeTabs.Trigger name="loans">
+        <Label>Loans</Label>
+        <Icon src={<VectorIcon family={MaterialIcons} name="swap-horiz" />} />
+      </NativeTabs.Trigger>
+
       <NativeTabs.Trigger name="reports">
         <Label>Reports</Label>
         <Icon src={<VectorIcon family={MaterialIcons} name="bar-chart" />} />
@@ -23,6 +28,11 @@ export default function TabsLayout() {
       <NativeTabs.Trigger name="history">
         <Label>History</Label>
         <Icon src={<VectorIcon family={MaterialIcons} name="history" />} />
+      </NativeTabs.Trigger>
+
+      <NativeTabs.Trigger name="backup">
+        <Label>Backup</Label>
+        <Icon src={<VectorIcon family={MaterialIcons} name="cloud" />} />
       </NativeTabs.Trigger>
     </NativeTabs>
   );

@@ -51,6 +51,24 @@ export function formatRelativeDay(key: string): string {
   return formatFullDate(key);
 }
 
+/** First day key of the month containing `key`. */
+export function monthStart(key: string): string {
+  const d = keyToDate(key);
+  return dateKey(new Date(d.getFullYear(), d.getMonth(), 1));
+}
+
+/** Last day key of the month containing `key`. */
+export function monthEnd(key: string): string {
+  const d = keyToDate(key);
+  return dateKey(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+}
+
+/** e.g. "Jul 2026". */
+export function formatMonth(key: string): string {
+  const d = keyToDate(key);
+  return `${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
 /** Monday-based start of the week containing `key`. */
 export function weekStart(key: string): string {
   const d = keyToDate(key);

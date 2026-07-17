@@ -1,20 +1,20 @@
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import { Platform, Pressable, StyleSheet } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { BottomTabInset, Spacing } from '@/constants/theme';
 
-/** Floating "+ Add" button that opens the add-entry modal. */
-export function AddButton() {
+/** Floating "+ Add" button that opens a modal (the add-entry one by default). */
+export function AddButton({ href = '/entry' as Href, label = 'Add' }: { href?: Href; label?: string }) {
   const router = useRouter();
   return (
     <Pressable
-      onPress={() => router.push('/entry')}
+      onPress={() => router.push(href)}
       style={({ pressed }) => [styles.fab, pressed && styles.pressed]}
       accessibilityRole="button"
-      accessibilityLabel="Add entry">
+      accessibilityLabel={label}>
       <ThemedText style={styles.plus}>＋</ThemedText>
-      <ThemedText style={styles.label}>Add</ThemedText>
+      <ThemedText style={styles.label}>{label}</ThemedText>
     </Pressable>
   );
 }

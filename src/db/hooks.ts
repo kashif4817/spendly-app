@@ -3,7 +3,7 @@ import * as SQLite from 'expo-sqlite';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { FALLBACK_EMOJI } from '@/constants/categories';
-import { getCategories, type EntryType } from '@/db';
+import { getCategories, onDbChanged, type EntryType } from '@/db';
 
 /**
  * A counter that ticks whenever the database changes or the screen regains
@@ -16,7 +16,13 @@ function useRefreshKey(): number {
   // Live updates: any INSERT/UPDATE/DELETE anywhere re-runs dependent queries.
   useEffect(() => {
     const sub = SQLite.addDatabaseChangeListener(bump);
-    return () => sub.remove();
+    // Also refresh when the connection is swapped (sign-in/out) or a cloud
+    // sync pulls remote changes — neither fires the native change listener.
+    const unsubscribe = onDbChanged(bump);
+    return () => {
+      sub.remove();
+      unsubscribe();
+    };
   }, [bump]);
 
   // Refresh when navigating back to a screen (e.g. after the Add modal closes).

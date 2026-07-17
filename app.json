@@ -35,12 +35,20 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#FFFFFF",
+          "backgroundColor": "#0B7C4F",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 180
+          "imageWidth": 180,
+          "dark": {
+            "backgroundColor": "#081C13"
+          }
         }
       ],
-      "expo-sqlite"
+      [
+        "expo-sqlite",
+        {
+          "useLibSQL": true
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
