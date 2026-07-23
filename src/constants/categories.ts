@@ -11,19 +11,25 @@ export type PresetCategory = {
  * their own on top of these from the Add-entry screen.
  */
 export const PRESET_CATEGORIES: PresetCategory[] = [
-  // Money out (expenses)
-  { name: 'Food', emoji: '🍔', type: 'out' },
+  // Money out — everyday hostel/student spends first
+  { name: 'Breakfast', emoji: '🍳', type: 'out' },
+  { name: 'Lunch', emoji: '🍛', type: 'out' },
+  { name: 'Dinner', emoji: '🍽️', type: 'out' },
+  { name: 'Tea', emoji: '🫖', type: 'out' },
+  { name: 'Coffee', emoji: '☕', type: 'out' },
+  { name: 'Snacks', emoji: '🍟', type: 'out' },
   { name: 'Groceries', emoji: '🛒', type: 'out' },
-  { name: 'Transport', emoji: '🚗', type: 'out' },
-  { name: 'Bills', emoji: '💡', type: 'out' },
+  { name: 'Transport', emoji: '🚌', type: 'out' },
+  { name: 'Mobile / Recharge', emoji: '📱', type: 'out' },
   { name: 'Rent', emoji: '🏠', type: 'out' },
-  { name: 'Shopping', emoji: '🛍️', type: 'out' },
+  { name: 'Laundry', emoji: '🧺', type: 'out' },
+  { name: 'Stationery', emoji: '✏️', type: 'out' },
   { name: 'Health', emoji: '💊', type: 'out' },
   { name: 'Entertainment', emoji: '🎬', type: 'out' },
   { name: 'Other', emoji: '📦', type: 'out' },
   // Money in (income)
+  { name: 'Pocket money', emoji: '💵', type: 'in' },
   { name: 'Salary', emoji: '💼', type: 'in' },
-  { name: 'Business', emoji: '🏢', type: 'in' },
   { name: 'Gift', emoji: '🎁', type: 'in' },
   { name: 'Other income', emoji: '💰', type: 'in' },
 ];

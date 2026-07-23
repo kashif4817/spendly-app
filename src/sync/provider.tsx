@@ -1,46 +1,61 @@
 /**
- * Wires cloud sync + login into the app.
+ * Wires Supabase Auth (Google only) + background sync into the app.
  *
- * On launch it connects to the shared Turso database (an embedded replica),
- * then restores the saved session so you're signed in without logging in again.
- * Login/signup are checked locally against the synced `users` table. Sync is
- * best-effort and silent — on app foreground and whenever the data changes;
- * offline is a no-op, not an error.
+ * On launch it restores the saved session (so you stay signed in, and the app
+ * opens offline once you've signed in once). The only sign-in is "Continue with
+ * Google" — a Google ID token is exchanged for a Supabase session. Sync is
+ * silent and best-effort: on app foreground, shortly after any edit, and on a
+ * timer — so offline entries upload themselves once the connection is back.
  */
 
-import Constants, { ExecutionEnvironment } from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { User } from '@supabase/supabase-js';
 import * as SQLite from 'expo-sqlite';
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
 import {
-  activateCloudDatabase,
-  isCloudActive,
-  loginUser,
+  adoptUnassignedData,
+  getCurrentUserId,
+  getLocalUserId,
+  hasAnyCategories,
+  seedMissingPresets,
+  seedPresets,
   setCurrentUserId,
-  signupUser,
-  syncCloudNow,
+  setLocalUserId,
+  wipeLocalData,
 } from '@/db';
-import { isDirectSync, TURSO_TOKEN, TURSO_URL } from '@/sync/config';
-import { clearSession, getSession, saveSession } from '@/sync/session';
+import { googleSignInIdToken, googleSignOut, isGoogleConfigured } from '@/lib/google';
+import { ensureDefaultReminder } from '@/lib/notifications';
+import { avatarUrl as getSignedAvatarUrl, getAvatarPath, upsertProfile } from '@/lib/profile';
+import { supabase } from '@/lib/supabase';
+import { runSync } from '@/sync/engine';
 
-// Cloud sync needs libSQL, which exists in a real build (dev or release) but NOT
-// in Expo Go. Gate on that rather than __DEV__ so a local dev build can sync.
-const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+/** How often to retry a sync while the app is foregrounded (catches reconnects). */
+const SYNC_INTERVAL_MS = 30_000;
+
+/** Flag so the "add newly-introduced presets" top-up runs only once per device. */
+const PRESETS_TOPUP_KEY = 'presets_topup_v2';
 
 type SyncStatus = 'idle' | 'syncing' | 'offline';
 
 type SyncContextValue = {
-  /** False until the initial connect + session restore has finished. */
+  /** False until the initial session restore has finished. */
   ready: boolean;
   /** Signed-in email, or null when signed out. */
   email: string | null;
+  /** Signed-in user's display name (from Google), or null. */
+  name: string | null;
+  /** URL for the user's avatar (uploaded, else the Google photo), or null. */
+  avatarUrl: string | null;
   status: SyncStatus;
   lastSyncedAt: Date | null;
-  signUp: (email: string, password: string) => Promise<void>;
-  logIn: (email: string, password: string) => Promise<void>;
-  logOut: () => void;
+  /** Continue with Google. Throws on failure; GOOGLE_CANCELLED when dismissed. */
+  signInWithGoogle: () => Promise<void>;
+  logOut: () => Promise<void>;
   syncNow: () => void;
+  /** Re-fetch the avatar (after the user changes it). */
+  reloadAvatar: () => Promise<void>;
 };
 
 const SyncContext = createContext<SyncContextValue | null>(null);
@@ -51,85 +66,199 @@ export function useSync(): SyncContextValue {
   return ctx;
 }
 
+const metaString = (user: User, ...keys: string[]): string | null => {
+  for (const k of keys) {
+    const v = user.user_metadata?.[k];
+    if (typeof v === 'string' && v) return v;
+  }
+  return null;
+};
+
 export function SyncProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [email, setEmail] = useState<string | null>(null);
+  const [name, setName] = useState<string | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<SyncStatus>('idle');
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const busy = useRef(false);
+  // The Google account photo, used as the avatar until the user uploads one.
+  const googlePicture = useRef<string | null>(null);
 
-  const runSync = useRef(async () => {
-    if (!isCloudActive() || busy.current) return;
+  // Stable: reads the active user from the db module, so it never goes stale
+  // inside long-lived listeners.
+  const sync = useCallback(async () => {
+    const userId = getCurrentUserId();
+    if (!userId || busy.current) return;
     busy.current = true;
     setStatus('syncing');
-    const ok = await syncCloudNow();
+    const ok = await runSync(userId);
     setStatus(ok ? 'idle' : 'offline');
     if (ok) setLastSyncedAt(new Date());
     busy.current = false;
-  }).current;
+  }, []);
 
-  useEffect(() => {
-    let cancelled = false;
+  const reloadAvatar = useCallback(async () => {
+    const uid = getCurrentUserId();
+    if (!uid) {
+      setAvatarUrl(googlePicture.current);
+      return;
+    }
+    try {
+      const path = await getAvatarPath(uid);
+      setAvatarUrl(path ? await getSignedAvatarUrl(path) : googlePicture.current);
+    } catch {
+      setAvatarUrl(googlePicture.current);
+    }
+  }, []);
 
-    const boot = async () => {
-      // Connect to the shared database. Skipped only in Expo Go, which has no
-      // libSQL — auth there runs against the local database, without cloud sync.
-      if (!isExpoGo && isDirectSync()) {
-        try {
-          await activateCloudDatabase(TURSO_URL, TURSO_TOKEN);
-        } catch {
-          // no useLibSQL in this build — stay local
+  const establishAccount = useCallback(
+    async (user: User) => {
+      const userId = user.id;
+
+      // A different account on a device that already holds someone else's data:
+      // start clean so their rows never mix.
+      const localUser = getLocalUserId();
+      if (localUser && localUser !== userId) wipeLocalData();
+
+      setLocalUserId(userId);
+      setCurrentUserId(userId);
+      // Claim any data created before this account signed in (e.g. pre-sync data).
+      adoptUnassignedData(userId);
+
+      const displayName = metaString(user, 'full_name', 'name');
+      googlePicture.current = metaString(user, 'avatar_url', 'picture');
+      setEmail(user.email ?? null);
+      setName(displayName);
+      // Show the Google account photo right away; reloadAvatar() below upgrades
+      // to an uploaded avatar if the user has set one.
+      setAvatarUrl(googlePicture.current);
+
+      // Best-effort profile row + default reminder + avatar (never block login).
+      upsertProfile(userId, user.email ?? null, displayName).catch(() => {});
+      ensureDefaultReminder().catch(() => {});
+      reloadAvatar();
+
+      await sync();
+
+      // A brand-new account (nothing synced down) gets the default categories.
+      // Google sign-in is always online, so an empty set here means truly new.
+      if (!hasAnyCategories()) {
+        seedPresets(userId);
+        await sync();
+      }
+
+      // One-time: introduce presets added in a newer app version (e.g. the
+      // hostel meal categories) to accounts that were created before them.
+      // Bump the key suffix whenever the preset list grows to re-run this.
+      try {
+        if (!(await AsyncStorage.getItem(PRESETS_TOPUP_KEY))) {
+          const added = seedMissingPresets(userId);
+          await AsyncStorage.setItem(PRESETS_TOPUP_KEY, '1');
+          if (added > 0) await sync();
         }
+      } catch {
+        // non-critical — new presets can also be added by hand
       }
-      if (cancelled) return;
+    },
+    [sync, reloadAvatar]
+  );
 
-      const session = getSession();
-      if (session) {
-        setCurrentUserId(session.userId);
-        setEmail(session.email);
+  // Restore the saved session on launch, and keep email in sync with auth events.
+  useEffect(() => {
+    let mounted = true;
+
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (mounted && data.session?.user) {
+          await establishAccount(data.session.user);
+        }
+      } catch {
+        // offline or misconfigured — the sign-in screen handles it
       }
-      setReady(true);
-      runSync();
-    };
-    boot();
+      if (mounted) setReady(true);
+    })();
 
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const debounced = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(runSync, 800);
-    };
-    const appSub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') runSync();
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setEmail(null);
+        setName(null);
+      } else if (session?.user) {
+        setEmail(session.user.email ?? null);
+        setName(metaString(session.user, 'full_name', 'name'));
+        // Keep the Google photo as the fallback avatar, without clobbering an
+        // uploaded one that reloadAvatar() may have already set.
+        const pic = metaString(session.user, 'avatar_url', 'picture');
+        googlePicture.current = pic;
+        setAvatarUrl((prev) => prev ?? pic);
+      }
     });
-    const dbSub = SQLite.addDatabaseChangeListener(debounced);
+
     return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
+      mounted = false;
+      sub.subscription.unsubscribe();
+    };
+  }, [establishAccount]);
+
+  // Background sync triggers: app foreground, a debounced tick after any edit,
+  // and a periodic retry so offline changes go up when the connection returns.
+  useEffect(() => {
+    const appSub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') sync();
+    });
+    const timer = setInterval(sync, SYNC_INTERVAL_MS);
+
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const dbSub = SQLite.addDatabaseChangeListener(() => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(sync, 1000);
+    });
+
+    return () => {
       appSub.remove();
+      clearInterval(timer);
+      if (debounce) clearTimeout(debounce);
       dbSub.remove();
     };
-  }, [runSync]);
+  }, [sync]);
 
-  const enter = (user: { id: number; email: string }) => {
-    saveSession({ userId: user.id, email: user.email });
-    setCurrentUserId(user.id);
-    setEmail(user.email);
-    runSync();
-  };
+  const signInWithGoogle = useCallback(async () => {
+    if (!isGoogleConfigured()) {
+      throw new Error('Google sign-in isn’t set up yet (missing Web client ID).');
+    }
+    const idToken = await googleSignInIdToken();
+    const { data, error } = await supabase.auth.signInWithIdToken({
+      provider: 'google',
+      token: idToken,
+    });
+    if (error) throw new Error(error.message);
+    if (!data.user) throw new Error('Google sign-in failed. Please try again.');
+    await establishAccount(data.user);
+  }, [establishAccount]);
+
+  const logOut = useCallback(async () => {
+    await googleSignOut();
+    await supabase.auth.signOut();
+    setCurrentUserId(null);
+    googlePicture.current = null;
+    setEmail(null);
+    setName(null);
+    setAvatarUrl(null);
+    setStatus('idle');
+  }, []);
 
   const value: SyncContextValue = {
     ready,
     email,
+    name,
+    avatarUrl,
     status,
     lastSyncedAt,
-    signUp: async (e, p) => enter(signupUser(e, p)),
-    logIn: async (e, p) => enter(loginUser(e, p)),
-    logOut: () => {
-      clearSession();
-      setCurrentUserId(null);
-      setEmail(null);
-    },
-    syncNow: runSync,
+    signInWithGoogle,
+    logOut,
+    syncNow: sync,
+    reloadAvatar,
   };
 
   return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;

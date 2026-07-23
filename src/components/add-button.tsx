@@ -1,16 +1,24 @@
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useRouter, type Href } from 'expo-router';
 import { Platform, Pressable, StyleSheet } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
-import { BottomTabInset, Spacing } from '@/constants/theme';
+import { Spacing } from '@/constants/theme';
 
 /** Floating "+ Add" button that opens a modal (the add-entry one by default). */
 export function AddButton({ href = '/entry' as Href, label = 'Add' }: { href?: Href; label?: string }) {
   const router = useRouter();
+  // Sit just above the actual tab bar (its height varies with the device's
+  // navigation-bar / safe-area inset), so the button never floats or overlaps.
+  const tabBarHeight = useBottomTabBarHeight();
   return (
     <Pressable
       onPress={() => router.push(href)}
-      style={({ pressed }) => [styles.fab, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.fab,
+        { bottom: tabBarHeight + Spacing.three },
+        pressed && styles.pressed,
+      ]}
       accessibilityRole="button"
       accessibilityLabel={label}>
       <ThemedText style={styles.plus}>＋</ThemedText>
@@ -23,7 +31,6 @@ const styles = StyleSheet.create({
   fab: {
     position: 'absolute',
     right: Spacing.four,
-    bottom: BottomTabInset + Spacing.three,
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.one,

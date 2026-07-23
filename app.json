@@ -43,12 +43,22 @@
           }
         }
       ],
+      "expo-sqlite",
+      "expo-secure-store",
       [
-        "expo-sqlite",
+        "expo-image-picker",
         {
-          "useLibSQL": true
+          "photosPermission": "Spendly needs access to your photos so you can attach a receipt to an expense.",
+          "cameraPermission": "Spendly needs camera access so you can snap a photo of your receipt."
         }
-      ]
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Spendly uses Face ID to unlock the app."
+        }
+      ],
+      "@react-native-google-signin/google-signin"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -99,3 +99,33 @@ export function formatWeekRange(startKey: string): string {
 export function weekdayLetter(key: string): string {
   return WEEKDAYS[keyToDate(key).getDay()][0];
 }
+
+/** Add (or subtract) whole months to a day key. */
+export function addMonths(key: string, n: number): string {
+  const d = keyToDate(key);
+  d.setMonth(d.getMonth() + n);
+  return dateKey(d);
+}
+
+/** First day key of the year containing `key`. */
+export function yearStart(key: string): string {
+  const d = keyToDate(key);
+  return dateKey(new Date(d.getFullYear(), 0, 1));
+}
+
+/** Last day key of the year containing `key`. */
+export function yearEnd(key: string): string {
+  const d = keyToDate(key);
+  return dateKey(new Date(d.getFullYear(), 11, 31));
+}
+
+/** "Jul 26" from a "YYYY-MM" month key. */
+export function monthKeyLabel(monthKey: string): string {
+  const [y, m] = monthKey.split('-').map(Number);
+  return `${MONTHS[m - 1]} ${String(y).slice(2)}`;
+}
+
+/** "Jul" from a "YYYY-MM" month key. */
+export function monthShort(monthKey: string): string {
+  return MONTHS[Number(monthKey.split('-')[1]) - 1];
+}

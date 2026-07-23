@@ -2,12 +2,10 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import * as Updates from 'expo-updates';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Pressable, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
-import { BottomTabInset, Spacing } from '@/constants/theme';
-
-/** Clears the floating AddButton so the two never overlap. */
-const FabClearance = 52;
+import { Spacing } from '@/constants/theme';
 
 /**
  * Floating banner offering an over-the-air update once one has downloaded.
@@ -20,6 +18,7 @@ export function UpdatePrompt() {
   const { isDownloading, isUpdatePending } = Updates.useUpdates();
   const [dismissed, setDismissed] = useState(false);
   const checking = useRef(false);
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     // Updates are stripped from Expo Go and dev builds, where these calls throw
@@ -51,7 +50,7 @@ export function UpdatePrompt() {
   if (dismissed || (!isDownloading && !isUpdatePending)) return null;
 
   return (
-    <View style={styles.banner}>
+    <View style={[styles.banner, { top: insets.top + Spacing.two }]}>
       <View style={styles.left}>
         <MaterialIcons name="system-update" size={20} color="#ffffff" />
         <View style={styles.copy}>
@@ -95,7 +94,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: Spacing.three,
     right: Spacing.three,
-    bottom: BottomTabInset + Spacing.three + FabClearance,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',

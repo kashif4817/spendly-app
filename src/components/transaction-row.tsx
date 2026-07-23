@@ -1,3 +1,4 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
@@ -36,9 +37,14 @@ export function TransactionRow({ transaction, emoji, onPress, showTime }: Props)
       </View>
 
       <View style={styles.middle}>
-        <ThemedText type="smallBold" numberOfLines={1}>
-          {transaction.category}
-        </ThemedText>
+        <View style={styles.titleRow}>
+          <ThemedText type="smallBold" numberOfLines={1} style={styles.titleText}>
+            {transaction.category}
+          </ThemedText>
+          {transaction.receipt_path ? (
+            <MaterialIcons name="receipt-long" size={13} color={theme.textSecondary} />
+          ) : null}
+        </View>
         <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
           {subtitle}
         </ThemedText>
@@ -76,5 +82,13 @@ const styles = StyleSheet.create({
   middle: {
     flex: 1,
     gap: 1,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+  },
+  titleText: {
+    flexShrink: 1,
   },
 });
