@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ActionSheet } from '@/components/action-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
@@ -17,15 +18,9 @@ const ACCENT = '#0B7C4F';
 export default function ProfileScreen() {
   const { name, email, avatarUrl, reloadAvatar } = useSync();
   const [busy, setBusy] = useState(false);
+  const [chooserOpen, setChooserOpen] = useState(false);
 
-  const openChooser = () => {
-    Alert.alert('Profile photo', undefined, [
-      { text: 'Take photo', onPress: () => pick('camera') },
-      { text: 'Choose from gallery', onPress: () => pick('library') },
-      ...(avatarUrl ? [{ text: 'Remove photo', style: 'destructive' as const, onPress: remove }] : []),
-      { text: 'Cancel', style: 'cancel' as const },
-    ]);
-  };
+  const openChooser = () => setChooserOpen(true);
 
   async function pick(source: 'camera' | 'library') {
     const uid = getCurrentUserId();
@@ -96,6 +91,26 @@ export default function ProfileScreen() {
           </Pressable>
         </View>
       </SafeAreaView>
+
+      <ActionSheet
+        visible={chooserOpen}
+        title="Profile photo"
+        onClose={() => setChooserOpen(false)}
+        actions={[
+          { label: 'Take photo', icon: 'photo-camera', onPress: () => pick('camera') },
+          { label: 'Choose from gallery', icon: 'photo-library', onPress: () => pick('library') },
+          ...(avatarUrl
+            ? [
+                {
+                  label: 'Remove photo',
+                  icon: 'delete-outline' as const,
+                  destructive: true,
+                  onPress: remove,
+                },
+              ]
+            : []),
+        ]}
+      />
     </ThemedView>
   );
 }

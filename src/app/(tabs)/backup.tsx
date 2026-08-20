@@ -1,21 +1,46 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import Constants from 'expo-constants';
+import { Image } from 'expo-image';
 import { useRouter, type Href } from 'expo-router';
+import * as Updates from 'expo-updates';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ConfirmModal } from '@/components/confirm-modal';
+import { Segmented } from '@/components/segmented';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { useWeekStart } from '@/hooks/use-week-start';
 import { exportCsv, exportPdf } from '@/lib/export';
 import { applyReminder, formatTime, getReminderPrefs } from '@/lib/notifications';
+import { setWeekStart } from '@/lib/week-start';
 import { useLock } from '@/lock/provider';
 import { useSync } from '@/sync/provider';
 
 const ACCENT = '#0B7C4F';
 const DANGER = '#e5484d';
+const LOGO = require('../../../assets/images/spendly-logo.png');
+
+/**
+ * "Version 1.0.0 · 3f9ac2b1" — the app version plus the short id of the OTA
+ * update actually running, so what's live on a device is always identifiable.
+ * Falls back to just the version where expo-updates isn't available (Expo Go,
+ * dev builds).
+ */
+function buildLabel(): string {
+  const version = Constants.expoConfig?.version ?? '';
+  try {
+    if (Updates.isEnabled && Updates.updateId) {
+      return `Version ${version} · ${Updates.updateId.slice(0, 8)}`;
+    }
+  } catch {
+    // updates module unavailable — the version alone is fine
+  }
+  return version ? `Version ${version}` : '';
+}
 const TIME_PRESETS = [
   { h: 8, m: 0 },
   { h: 13, m: 0 },
@@ -28,6 +53,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const { name, email, status, lastSyncedAt, syncNow, logOut } = useSync();
   const { enabled: lockEnabled } = useLock();
+  const weekStartsOn = useWeekStart();
 
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [reminder, setReminder] = useState({ enabled: false, hour: 21, minute: 0 });
@@ -147,6 +173,27 @@ export default function SettingsScreen() {
             </View>
           </Pressable>
 
+          {/* Preferences */}
+          <ThemedText type="smallBold" themeColor="textSecondary" style={styles.section}>
+            PREFERENCES
+          </ThemedText>
+          <View style={[styles.card, card]}>
+            <View style={styles.linkText}>
+              <ThemedText type="smallBold">Week starts on</ThemedText>
+              <ThemedText type="small" themeColor="textSecondary">
+                Sets the weekly totals on your dashboard, reports and calendar
+              </ThemedText>
+            </View>
+            <Segmented
+              options={[
+                { label: 'Monday', value: 'mon' },
+                { label: 'Sunday', value: 'sun' },
+              ]}
+              value={weekStartsOn === 1 ? 'mon' : 'sun'}
+              onChange={(value) => setWeekStart(value === 'mon' ? 1 : 0)}
+            />
+          </View>
+
           {/* Reminders */}
           <ThemedText type="smallBold" themeColor="textSecondary" style={styles.section}>
             REMINDERS
@@ -209,6 +256,19 @@ export default function SettingsScreen() {
               secondary={theme.textSecondary}
             />
           </View>
+
+          <View style={styles.brand}>
+            <Image source={LOGO} style={styles.brandLogo} contentFit="contain" />
+            <ThemedText type="smallBold" style={styles.brandName}>
+              Spendly
+            </ThemedText>
+            <ThemedText type="small" themeColor="textSecondary">
+              Made by Kashif Mehmood
+            </ThemedText>
+            <ThemedText type="small" themeColor="textSecondary" style={styles.brandVersion}>
+              {buildLabel()}
+            </ThemedText>
+          </View>
         </ScrollView>
       </SafeAreaView>
 
@@ -270,6 +330,26 @@ function ExportRow({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  brand: {
+    alignItems: 'center',
+    gap: Spacing.half,
+    marginTop: Spacing.six,
+  },
+  brandLogo: {
+    width: 44,
+    height: 44,
+    marginBottom: Spacing.one,
+    opacity: 0.9,
+  },
+  brandName: {
+    fontSize: 16,
+    lineHeight: 22,
+  },
+  brandVersion: {
+    fontSize: 12,
+    opacity: 0.7,
+    marginTop: Spacing.half,
+  },
   safeArea: {
     flex: 1,
     alignSelf: 'center',

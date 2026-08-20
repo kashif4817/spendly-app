@@ -69,17 +69,30 @@ export function formatMonth(key: string): string {
   return `${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 
-/** Monday-based start of the week containing `key`. */
-export function weekStart(key: string): string {
+/** Which weekday a week starts on: 0 = Sunday, 1 = Monday. */
+export type WeekStart = 0 | 1;
+
+/** Weeks start on Monday until the user says otherwise. */
+export const DEFAULT_WEEK_START: WeekStart = 1;
+
+/** Start of the week containing `key`, for the given first weekday. */
+export function weekStart(key: string, startsOn: WeekStart = DEFAULT_WEEK_START): string {
   const d = keyToDate(key);
-  const dow = (d.getDay() + 6) % 7; // 0 = Monday
+  const dow = (d.getDay() - startsOn + 7) % 7; // days since the week's first day
   d.setDate(d.getDate() - dow);
   return dateKey(d);
 }
 
-/** Sunday-based end of the week containing `key`. */
-export function weekEnd(key: string): string {
-  return addDays(weekStart(key), 6);
+/** End of the week containing `key` — always six days after its start. */
+export function weekEnd(key: string, startsOn: WeekStart = DEFAULT_WEEK_START): string {
+  return addDays(weekStart(key, startsOn), 6);
+}
+
+const WEEKDAY_HEADINGS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+
+/** Two-letter weekday headings in display order, e.g. ["Mo", … , "Su"]. */
+export function weekdayHeadings(startsOn: WeekStart = DEFAULT_WEEK_START): string[] {
+  return Array.from({ length: 7 }, (_, i) => WEEKDAY_HEADINGS[(startsOn + i) % 7]);
 }
 
 /** e.g. "14 – 20 Jul 2026" (or spanning months/years when needed). */

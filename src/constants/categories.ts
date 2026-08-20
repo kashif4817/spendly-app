@@ -36,3 +36,24 @@ export const PRESET_CATEGORIES: PresetCategory[] = [
 
 /** Fallback emoji when a category has no icon (e.g. a deleted custom one). */
 export const FALLBACK_EMOJI = '💸';
+
+/** Emoji offered when choosing or changing a category's icon. */
+export const CATEGORY_EMOJIS: string[] = [
+  // Food & drink
+  '🍳', '🍛', '🍽️', '🍔', '🍕', '🍜', '🥗', '🍪',
+  '🍟', '☕', '🫖', '🥤', '🍺', '🛒', '🍎', '🧁',
+  // Travel & transport
+  '🚌', '🚕', '🚗', '🛺', '🛵', '🚲', '⛽', '🛣️',
+  '✈️', '🚄', '🧳', '🏖️',
+  // Home & bills
+  '🏠', '🏢', '🛏️', '🧺', '💡', '🚰', '🔥', '📶',
+  '📱', '💻', '📺', '🧹',
+  // Shopping & personal
+  '🛍️', '👕', '👟', '💄', '💇', '🎁', '💍', '👓',
+  // Health & study
+  '💊', '🩺', '🏥', '🦷', '📚', '✏️', '🎓', '🔬',
+  // Fun & misc
+  '🎬', '🎮', '🎵', '⚽', '🏋️', '🏕️', '🐾', '📦',
+  // Money in
+  '💵', '💰', '💼', '🏦', '📈', '🧾', '🤝', '💳',
+];

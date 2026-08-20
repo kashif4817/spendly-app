@@ -30,6 +30,7 @@ import { ensureDefaultReminder } from '@/lib/notifications';
 import { avatarUrl as getSignedAvatarUrl, getAvatarPath, upsertProfile } from '@/lib/profile';
 import { supabase } from '@/lib/supabase';
 import { runSync } from '@/sync/engine';
+import { readCachedUser } from '@/sync/session-cache';
 
 /** How often to retry a sync while the app is foregrounded (catches reconnects). */
 const SYNC_INTERVAL_MS = 30_000;
@@ -87,15 +88,19 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
 
   // Stable: reads the active user from the db module, so it never goes stale
   // inside long-lived listeners.
-  const sync = useCallback(async () => {
+  const sync = useCallback(async (): Promise<boolean> => {
     const userId = getCurrentUserId();
-    if (!userId || busy.current) return;
+    if (!userId || busy.current) return false;
     busy.current = true;
     setStatus('syncing');
-    const ok = await runSync(userId);
-    setStatus(ok ? 'idle' : 'offline');
-    if (ok) setLastSyncedAt(new Date());
-    busy.current = false;
+    try {
+      const ok = await runSync(userId);
+      setStatus(ok ? 'idle' : 'offline');
+      if (ok) setLastSyncedAt(new Date());
+      return ok;
+    } finally {
+      busy.current = false;
+    }
   }, []);
 
   const reloadAvatar = useCallback(async () => {
@@ -112,6 +117,20 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  /**
+   * Adopt a user as the signed-in account — purely local state, no network.
+   * Shared by the offline restore path and the full online setup below.
+   */
+  const applyIdentity = useCallback((user: User) => {
+    setCurrentUserId(user.id);
+    // Show the Google account photo right away; reloadAvatar() upgrades to an
+    // uploaded avatar if the user has set one.
+    googlePicture.current = metaString(user, 'avatar_url', 'picture');
+    setEmail(user.email ?? null);
+    setName(metaString(user, 'full_name', 'name'));
+    setAvatarUrl(googlePicture.current);
+  }, []);
+
   const establishAccount = useCallback(
     async (user: User) => {
       const userId = user.id;
@@ -122,28 +141,22 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       if (localUser && localUser !== userId) wipeLocalData();
 
       setLocalUserId(userId);
-      setCurrentUserId(userId);
+      applyIdentity(user);
       // Claim any data created before this account signed in (e.g. pre-sync data).
       adoptUnassignedData(userId);
 
-      const displayName = metaString(user, 'full_name', 'name');
-      googlePicture.current = metaString(user, 'avatar_url', 'picture');
-      setEmail(user.email ?? null);
-      setName(displayName);
-      // Show the Google account photo right away; reloadAvatar() below upgrades
-      // to an uploaded avatar if the user has set one.
-      setAvatarUrl(googlePicture.current);
-
       // Best-effort profile row + default reminder + avatar (never block login).
-      upsertProfile(userId, user.email ?? null, displayName).catch(() => {});
+      upsertProfile(userId, user.email ?? null, metaString(user, 'full_name', 'name')).catch(() => {});
       ensureDefaultReminder().catch(() => {});
       reloadAvatar();
 
-      await sync();
+      const synced = await sync();
 
       // A brand-new account (nothing synced down) gets the default categories.
-      // Google sign-in is always online, so an empty set here means truly new.
-      if (!hasAnyCategories()) {
+      // Only once a sync has actually completed: offline we can't tell "new
+      // account" from "not pulled yet", and seeding then would duplicate the
+      // categories the next pull brings down.
+      if (synced && !hasAnyCategories()) {
         seedPresets(userId);
         await sync();
       }
@@ -161,7 +174,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
         // non-critical — new presets can also be added by hand
       }
     },
-    [sync, reloadAvatar]
+    [sync, reloadAvatar, applyIdentity]
   );
 
   // Restore the saved session on launch, and keep email in sync with auth events.
@@ -169,15 +182,30 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     let mounted = true;
 
     (async () => {
+      // 1. Restore the account from storage first. This is local-only, so the
+      //    app opens straight into the user's data with no connection —
+      //    `getSession()` below can take a while offline (it refreshes an
+      //    expired token over the network) and would otherwise strand an
+      //    already-signed-in user on a spinner, then on the sign-in screen.
+      const cached = await readCachedUser();
+      // Only trust it when this device's data actually belongs to that account,
+      // so a stale session can never surface someone else's entries.
+      if (mounted && cached && getLocalUserId() === cached.id) {
+        applyIdentity(cached);
+      }
+      if (mounted) setReady(true);
+
+      // 2. Reconcile with Supabase in the background: refreshes the token,
+      //    picks up profile changes and runs the first sync. Offline this just
+      //    fails quietly and the restored identity above stands.
       try {
         const { data } = await supabase.auth.getSession();
         if (mounted && data.session?.user) {
           await establishAccount(data.session.user);
         }
       } catch {
-        // offline or misconfigured — the sign-in screen handles it
+        // offline or misconfigured — retried on the next foreground/sync tick
       }
-      if (mounted) setReady(true);
     })();
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
@@ -199,7 +227,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       mounted = false;
       sub.subscription.unsubscribe();
     };
-  }, [establishAccount]);
+  }, [establishAccount, applyIdentity]);
 
   // Background sync triggers: app foreground, a debounced tick after any edit,
   // and a periodic retry so offline changes go up when the connection returns.
@@ -239,7 +267,14 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
 
   const logOut = useCallback(async () => {
     await googleSignOut();
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // Offline: the revoke call couldn't go out. Drop the session locally
+      // anyway, otherwise it stays in storage and the restore above would sign
+      // the user straight back in on the next launch.
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+    }
     setCurrentUserId(null);
     googlePicture.current = null;
     setEmail(null);

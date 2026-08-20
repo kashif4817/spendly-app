@@ -6,13 +6,15 @@ import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BalanceCard } from '@/components/balance-card';
+import { Segmented } from '@/components/segmented';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
-import { getAllTransactions, getLedgerPeriodTotals, getTotals } from '@/db';
+import { getLedgerTotals, getTotals, getTransactionsByDay } from '@/db';
 import { useCategoryEmoji, useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
+import { useWeekStart } from '@/hooks/use-week-start';
 import {
   addDays,
   formatRelativeDay,
@@ -23,6 +25,7 @@ import {
   weekStart,
 } from '@/lib/date';
 import { formatMoney } from '@/lib/money';
+import { setWeekStart } from '@/lib/week-start';
 import { useSync } from '@/sync/provider';
 import { TransactionRow } from '@/components/transaction-row';
 
@@ -34,15 +37,17 @@ export default function DashboardScreen() {
   const { name, avatarUrl } = useSync();
   const emojiFor = useCategoryEmoji();
 
+  const weekStartsOn = useWeekStart();
+
   const today = todayKey();
-  const wkStart = weekStart(today);
-  const lastWkStart = weekStart(addDays(wkStart, -1));
+  const wkStart = weekStart(today, weekStartsOn);
+  const lastWkStart = weekStart(addDays(wkStart, -1), weekStartsOn);
 
   const periods = [
     { key: 'today', label: 'Today', start: today, end: today },
     { key: 'yesterday', label: 'Yesterday', start: addDays(today, -1), end: addDays(today, -1) },
-    { key: 'week', label: 'This week', start: wkStart, end: weekEnd(today) },
-    { key: 'lastweek', label: 'Last week', start: lastWkStart, end: weekEnd(lastWkStart) },
+    { key: 'week', label: 'This week', start: wkStart, end: weekEnd(today, weekStartsOn) },
+    { key: 'lastweek', label: 'Last week', start: lastWkStart, end: weekEnd(lastWkStart, weekStartsOn) },
     { key: 'month', label: 'This month', start: monthStart(today), end: monthEnd(today) },
     { key: 'all', label: 'All time', start: '0001-01-01', end: '9999-12-31' },
     { key: 'custom', label: 'Custom', start: today, end: today },
@@ -57,11 +62,9 @@ export default function DashboardScreen() {
   const periodLabel = periodKey === 'custom' ? 'Custom range' : preset.label;
 
   const totals = useQuery(() => getTotals(range.start, range.end), [range.start, range.end]);
-  const ledger = useQuery(
-    () => getLedgerPeriodTotals(range.start, range.end),
-    [range.start, range.end]
-  );
-  const recent = useQuery(() => getAllTransactions().slice(0, 5), []);
+  const ledger = useQuery(() => getLedgerTotals());
+  // Today only — older entries live on the Expenses and Reports tabs.
+  const recent = useQuery(() => getTransactionsByDay(today).slice(0, 5), [today]);
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -139,28 +142,28 @@ export default function DashboardScreen() {
             <View style={styles.peopleLegs}>
               <View style={styles.leg}>
                 <ThemedText type="small" themeColor="textSecondary">
-                  You gave
+                  You’ll get
                 </ThemedText>
                 <ThemedText style={[styles.legValue, { color: MoneyColors.in }]}>
-                  {formatMoney(ledger.gave)}
+                  {formatMoney(ledger.receivable)}
                 </ThemedText>
               </View>
               <View style={styles.leg}>
                 <ThemedText type="small" themeColor="textSecondary">
-                  You took
+                  You’ll pay
                 </ThemedText>
                 <ThemedText style={[styles.legValue, { color: MoneyColors.out }]}>
-                  {formatMoney(ledger.took)}
+                  {formatMoney(ledger.payable)}
                 </ThemedText>
               </View>
             </View>
           </ThemedView>
 
-          {/* Recent activity */}
+          {/* Today’s activity */}
           {recent.length > 0 && (
             <View style={styles.recent}>
               <View style={styles.recentHead}>
-                <ThemedText type="smallBold">Recent activity</ThemedText>
+                <ThemedText type="smallBold">Today’s activity</ThemedText>
                 <Pressable onPress={() => router.navigate('/reports' as Href)} hitSlop={8}>
                   <ThemedText type="small" style={{ color: ACCENT }}>
                     See all
@@ -201,6 +204,22 @@ export default function DashboardScreen() {
                 </Pressable>
               );
             })}
+
+            {/* Sets the boundaries "This week" / "Last week" above are cut on. */}
+            <View style={[styles.menuDivider, { backgroundColor: theme.backgroundSelected }]} />
+            <View style={styles.menuFooter}>
+              <ThemedText type="small" themeColor="textSecondary">
+                Week starts on
+              </ThemedText>
+              <Segmented
+                options={[
+                  { label: 'Monday', value: 'mon' },
+                  { label: 'Sunday', value: 'sun' },
+                ]}
+                value={weekStartsOn === 1 ? 'mon' : 'sun'}
+                onChange={(value) => setWeekStart(value === 'mon' ? 1 : 0)}
+              />
+            </View>
           </ThemedView>
         </Pressable>
       </Modal>
@@ -373,5 +392,14 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: Spacing.three,
     paddingHorizontal: Spacing.four,
+  },
+  menuDivider: {
+    height: 1,
+    marginTop: Spacing.two,
+  },
+  menuFooter: {
+    paddingTop: Spacing.three,
+    paddingHorizontal: Spacing.four,
+    gap: Spacing.two,
   },
 });

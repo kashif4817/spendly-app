@@ -1,5 +1,4 @@
-import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { useRouter, type Href } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, SectionList, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -7,7 +6,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { BalanceCard } from '@/components/balance-card';
 import { HBar, VerticalBars, type VerticalBar } from '@/components/bar-chart';
 import { BudgetBar } from '@/components/budget-bar';
-import { MonthlyInsights } from '@/components/monthly-insights';
 import { Segmented } from '@/components/segmented';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -26,6 +24,7 @@ import {
 } from '@/db';
 import { useCategoryEmoji, useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
+import { useWeekStart } from '@/hooks/use-week-start';
 import {
   addDays,
   formatMonth,
@@ -56,6 +55,7 @@ export default function ReportsScreen() {
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
   const emojiFor = useCategoryEmoji();
   const theme = useTheme();
+  const weekStartsOn = useWeekStart();
 
   // Budgets always track the current calendar month, whatever period is shown.
   const today = todayKey();
@@ -63,8 +63,8 @@ export default function ReportsScreen() {
 
   const { start, end } = useMemo(() => {
     if (period === 'daily') return { start: anchor, end: anchor };
-    return { start: weekStart(anchor), end: weekEnd(anchor) };
-  }, [period, anchor]);
+    return { start: weekStart(anchor, weekStartsOn), end: weekEnd(anchor, weekStartsOn) };
+  }, [period, anchor, weekStartsOn]);
 
   const totals = useQuery(() => getTotals(start, end), [start, end]);
   const slices = useQuery(
@@ -81,7 +81,7 @@ export default function ReportsScreen() {
   const nextDisabled =
     period === 'daily'
       ? anchor >= todayKey()
-      : weekStart(anchor) >= weekStart(todayKey());
+      : weekStart(anchor, weekStartsOn) >= weekStart(todayKey(), weekStartsOn);
 
   function go(direction: -1 | 1) {
     if (direction === 1 && nextDisabled) return;
@@ -89,7 +89,9 @@ export default function ReportsScreen() {
   }
 
   const periodLabel =
-    period === 'daily' ? formatRelativeDay(anchor) : formatWeekRange(weekStart(anchor));
+    period === 'daily'
+      ? formatRelativeDay(anchor)
+      : formatWeekRange(weekStart(anchor, weekStartsOn));
 
   // Build the 7 days of the week with full in/out info (drives bars + tap detail).
   const weekDays = useMemo(() => {
@@ -159,22 +161,6 @@ export default function ReportsScreen() {
       <ThemedText type="title" style={styles.title}>
         Reports
       </ThemedText>
-
-      <MonthlyInsights />
-
-      <Pressable
-        onPress={() => router.push('/advanced-report' as Href)}
-        style={({ pressed }) => [
-          styles.advBtn,
-          { backgroundColor: theme.backgroundElement },
-          pressed && { opacity: 0.7 },
-        ]}>
-        <MaterialIcons name="insights" size={20} color="#0B7C4F" />
-        <ThemedText type="smallBold" style={styles.advLabel}>
-          Advanced report
-        </ThemedText>
-        <MaterialIcons name="chevron-right" size={22} color={theme.textSecondary} />
-      </Pressable>
 
       <Segmented
         value={period}
@@ -408,17 +394,6 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 40,
     lineHeight: 46,
-  },
-  advBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-    borderRadius: 14,
-    paddingVertical: Spacing.three,
-    paddingHorizontal: Spacing.three,
-  },
-  advLabel: {
-    flex: 1,
   },
   nav: {
     flexDirection: 'row',

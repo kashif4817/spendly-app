@@ -37,7 +37,6 @@ export default function RootLayout() {
                     <Stack.Screen name="person" options={{ title: 'Person' }} />
                     <Stack.Screen name="ledger" options={{ presentation: 'modal', title: 'Add entry' }} />
                     <Stack.Screen name="budgets" options={{ presentation: 'modal', title: 'Monthly budgets' }} />
-                    <Stack.Screen name="advanced-report" options={{ title: 'Advanced Report' }} />
                     <Stack.Screen name="profile" options={{ title: 'Profile' }} />
                     <Stack.Screen name="security" options={{ presentation: 'modal', title: 'App Lock' }} />
                   </Stack>

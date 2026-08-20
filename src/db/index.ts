@@ -724,6 +724,86 @@ export function addCategory(name: string, emoji: string, type: EntryType): strin
   return trimmed;
 }
 
+/** Change a category's icon. Presets can be re-iconed too. */
+export function updateCategoryEmoji(id: string, emoji: string): void {
+  const updatedAt = nowIso();
+  db.runSync(
+    'UPDATE categories SET emoji = ?, updated_at = ? WHERE id = ?',
+    emoji, updatedAt, id
+  );
+  enqueue('categories', id, 'upsert', updatedAt);
+}
+
+/**
+ * Rename a category, carrying its entries and budget across with it.
+ *
+ * Entries and budgets reference a category by *name*, not id, so the rename has
+ * to cascade or the history would detach from the category it belongs to.
+ * Returns 'duplicate' if another category of the same type already owns the
+ * name, so callers can tell the user instead of silently doing nothing.
+ */
+export function renameCategory(id: string, name: string): 'ok' | 'empty' | 'duplicate' {
+  const trimmed = name.trim();
+  if (!trimmed) return 'empty';
+
+  const cat = db.getFirstSync<Category>('SELECT * FROM categories WHERE id = ?', id);
+  if (!cat) return 'empty';
+  if (cat.name === trimmed) return 'ok';
+
+  const clash = db.getFirstSync<{ id: string }>(
+    'SELECT id FROM categories WHERE name = ? AND type = ? AND id <> ?',
+    trimmed, cat.type, id
+  );
+  if (clash) return 'duplicate';
+
+  const updatedAt = nowIso();
+  db.withTransactionSync(() => {
+    db.runSync(
+      'UPDATE categories SET name = ?, updated_at = ? WHERE id = ?',
+      trimmed, updatedAt, id
+    );
+    enqueue('categories', id, 'upsert', updatedAt);
+
+    // Entries of the same direction that carried the old name.
+    const moved = db.getAllSync<{ id: string }>(
+      'SELECT id FROM transactions WHERE category = ? AND type = ?',
+      cat.name, cat.type
+    );
+    db.runSync(
+      'UPDATE transactions SET category = ?, updated_at = ? WHERE category = ? AND type = ?',
+      trimmed, updatedAt, cat.name, cat.type
+    );
+    for (const row of moved) enqueue('transactions', row.id, 'upsert', updatedAt);
+
+    // Budgets cap spending only, and hold one row per category name.
+    if (cat.type === 'out') {
+      const old = db.getFirstSync<{ id: string }>(
+        'SELECT id FROM budgets WHERE category = ?',
+        cat.name
+      );
+      if (old) {
+        const taken = db.getFirstSync<{ id: string }>(
+          'SELECT id FROM budgets WHERE category = ?',
+          trimmed
+        );
+        if (taken) {
+          // A stray budget already sits under the new name; keep it and drop
+          // the old row rather than trip the UNIQUE (category) constraint.
+          db.runSync('DELETE FROM budgets WHERE id = ?', old.id);
+          enqueue('budgets', old.id, 'delete', updatedAt);
+        } else {
+          db.runSync(
+            'UPDATE budgets SET category = ?, updated_at = ? WHERE id = ?',
+            trimmed, updatedAt, old.id
+          );
+          enqueue('budgets', old.id, 'upsert', updatedAt);
+        }
+      }
+    }
+  });
+  return 'ok';
+}
+
 // --- Loans ------------------------------------------------------------------
 // A loan's status is derived from its repayments: it is settled once the
 // recorded repayments cover the full amount. "Mark as settled" simply records

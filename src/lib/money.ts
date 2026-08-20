@@ -102,3 +102,20 @@ export function parseAmount(text: string): number {
   const fallback = Number.parseFloat(cleaned); // e.g. mid-typing "120+"
   return Number.isFinite(fallback) ? fallback : 0;
 }
+
+/**
+ * A short, symbol-less amount for tight spaces like calendar cells:
+ * 950, 1.2k, 12k, 1.4M. Always positive — the color carries the direction.
+ */
+export function formatCompact(amount: number): string {
+  const abs = Math.abs(amount);
+  if (abs < 1000) return String(Math.round(abs));
+  if (abs < 10000) return `${oneDecimal(abs / 1000)}k`;
+  if (abs < 1000000) return `${Math.round(abs / 1000)}k`;
+  return `${oneDecimal(abs / 1000000)}M`;
+}
+
+/** "1.2" but "12" — drops a trailing ".0". */
+function oneDecimal(n: number): string {
+  return n.toFixed(1).replace(/\.0$/, '');
+}

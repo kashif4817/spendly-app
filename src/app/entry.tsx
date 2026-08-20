@@ -20,6 +20,7 @@ import { Segmented } from '@/components/segmented';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { CURRENCY, MoneyColors } from '@/constants/app';
+import { CATEGORY_EMOJIS } from '@/constants/categories';
 import { Spacing } from '@/constants/theme';
 import {
   addCategory,
@@ -28,8 +29,11 @@ import {
   getCategories,
   getCurrentUserId,
   getTransaction,
+  renameCategory,
   setTransactionReceipt,
+  updateCategoryEmoji,
   updateTransaction,
+  type Category,
   type EntryType,
 } from '@/db';
 import { useQuery } from '@/db/hooks';
@@ -47,10 +51,13 @@ import {
   type PickedReceipt,
 } from '@/lib/receipts';
 
+/** Icon a brand-new category starts with until the user picks another. */
+const NEW_CAT_EMOJI = '🏷️';
+
 export default function EntryScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const params = useLocalSearchParams<{ id?: string }>();
+  const params = useLocalSearchParams<{ id?: string; day?: string }>();
   const editId = params.id ?? null;
 
   // Load the existing entry once when editing.
@@ -60,11 +67,21 @@ export default function EntryScreen() {
   const [amount, setAmount] = useState(existing ? String(existing.amount) : '');
   const [category, setCategory] = useState(existing?.category ?? '');
   const [note, setNote] = useState(existing?.note ?? '');
-  const [day, setDay] = useState(existing?.day ?? todayKey());
+  // A new entry defaults to the day the user picked on the calendar (falling
+  // back to today); editing always keeps the entry's own date.
+  const [day, setDay] = useState(existing?.day ?? params.day ?? todayKey());
 
   const [addingCategory, setAddingCategory] = useState(false);
   const [newCategory, setNewCategory] = useState('');
+  const [newCategoryEmoji, setNewCategoryEmoji] = useState(NEW_CAT_EMOJI);
   const [catMenuOpen, setCatMenuOpen] = useState(false);
+  const [catSearch, setCatSearch] = useState('');
+  // When set, the sheet swaps its list for the icon grid: either an existing
+  // category being re-iconed, or 'new' for the one being created.
+  const [iconTarget, setIconTarget] = useState<Category | 'new' | null>(null);
+  // Long-pressing a category swaps its row for an inline rename field.
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameText, setRenameText] = useState('');
 
   // Receipt: `pending` is a freshly picked photo not yet uploaded; `receiptPath`
   // is the stored path (existing or after upload); `receiptView` is its signed URL.
@@ -78,10 +95,67 @@ export default function EntryScreen() {
   const accent = type === 'in' ? MoneyColors.in : MoneyColors.out;
   const selectedCat = categories.find((c) => c.name === category) ?? null;
 
+  const visibleCategories = useMemo(() => {
+    const q = catSearch.trim().toLowerCase();
+    if (!q) return categories;
+    return categories.filter((c) => c.name.toLowerCase().includes(q));
+  }, [categories, catSearch]);
+
   function closeCatMenu() {
     setCatMenuOpen(false);
     setAddingCategory(false);
     setNewCategory('');
+    setNewCategoryEmoji(NEW_CAT_EMOJI);
+    setCatSearch('');
+    setIconTarget(null);
+    cancelRename();
+  }
+
+  function cancelRename() {
+    setRenamingId(null);
+    setRenameText('');
+  }
+
+  function startRename(cat: Category) {
+    setRenamingId(cat.id);
+    setRenameText(cat.name);
+  }
+
+  /** Commit an inline rename, keeping the current selection pointed at it. */
+  function saveRename(cat: Category) {
+    const next = renameText.trim();
+    if (!next || next === cat.name) {
+      cancelRename();
+      return;
+    }
+    const result = renameCategory(cat.id, next);
+    if (result === 'duplicate') {
+      Alert.alert(
+        'Name already used',
+        `Another ${cat.type === 'in' ? 'income' : 'expense'} category is already called “${next}”.`
+      );
+      return;
+    }
+    if (result !== 'ok') {
+      cancelRename();
+      return;
+    }
+    // Entries reference categories by name, so follow the rename here too.
+    if (category === cat.name) setCategory(next);
+    cancelRename();
+  }
+
+  /** Apply the tapped emoji to whichever target opened the icon grid. */
+  function pickEmoji(emoji: string) {
+    if (iconTarget === 'new') setNewCategoryEmoji(emoji);
+    else if (iconTarget) updateCategoryEmoji(iconTarget.id, emoji);
+    setIconTarget(null);
+  }
+
+  /** Start creating a category, seeded with whatever was typed in the search. */
+  function startAddingCategory() {
+    setNewCategory(catSearch.trim());
+    setAddingCategory(true);
   }
 
   // Resolve a signed URL for an already-stored receipt.
@@ -106,11 +180,9 @@ export default function EntryScreen() {
   function saveNewCategory() {
     const name = newCategory.trim();
     if (!name) return;
-    const saved = addCategory(name, '🏷️', type);
+    const saved = addCategory(name, newCategoryEmoji, type);
     setCategory(saved);
-    setNewCategory('');
-    setAddingCategory(false);
-    setCatMenuOpen(false);
+    closeCatMenu();
   }
 
   function attach() {
@@ -398,58 +470,183 @@ export default function EntryScreen() {
         <Pressable style={styles.catBackdrop} onPress={closeCatMenu}>
           <Pressable style={[styles.catSheet, { backgroundColor: theme.background }]}>
             <View style={styles.catHandle} />
-            <ThemedText type="smallBold" style={styles.catSheetTitle}>
-              {type === 'in' ? 'Income category' : 'Expense category'}
-            </ThemedText>
 
-            {addingCategory ? (
-              <View style={[styles.addRow, { backgroundColor: theme.backgroundElement }]}>
-                <TextInput
-                  value={newCategory}
-                  onChangeText={setNewCategory}
-                  placeholder="New category name"
-                  placeholderTextColor={theme.textSecondary}
-                  style={[styles.addInput, { color: theme.text }]}
-                  autoFocus
-                  onSubmitEditing={saveNewCategory}
-                  returnKeyType="done"
-                />
-                <Pressable onPress={saveNewCategory} hitSlop={8}>
-                  <ThemedText type="smallBold" style={{ color: accent }}>
-                    Add
-                  </ThemedText>
-                </Pressable>
-              </View>
-            ) : (
-              <Pressable onPress={() => setAddingCategory(true)} style={styles.optionRow}>
-                <MaterialIcons name="add" size={22} color={accent} style={styles.optionIcon} />
-                <ThemedText style={[styles.optionName, { color: accent }]}>
-                  Add new category
-                </ThemedText>
-              </Pressable>
-            )}
-
-            <ScrollView
-              style={styles.catList}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}>
-              {categories.map((cat) => {
-                const selected = cat.name === category;
-                return (
-                  <Pressable
-                    key={cat.id}
-                    onPress={() => {
-                      setCategory(cat.name);
-                      closeCatMenu();
-                    }}
-                    style={styles.optionRow}>
-                    <ThemedText style={styles.optionEmoji}>{cat.emoji}</ThemedText>
-                    <ThemedText style={styles.optionName}>{cat.name}</ThemedText>
-                    {selected && <MaterialIcons name="check" size={20} color={accent} />}
+            {iconTarget ? (
+              <>
+                {/* Icon grid — replaces the list while an icon is being chosen */}
+                <View style={styles.iconHead}>
+                  <Pressable onPress={() => setIconTarget(null)} hitSlop={8} style={styles.iconBack}>
+                    <MaterialIcons name="arrow-back" size={22} color={theme.text} />
                   </Pressable>
-                );
-              })}
-            </ScrollView>
+                  <ThemedText type="smallBold" style={styles.iconTitle} numberOfLines={1}>
+                    {iconTarget === 'new'
+                      ? 'Icon for the new category'
+                      : `Icon for ${iconTarget.name}`}
+                  </ThemedText>
+                </View>
+                <ScrollView style={styles.catList} showsVerticalScrollIndicator={false}>
+                  <View style={styles.iconGrid}>
+                    {CATEGORY_EMOJIS.map((emoji) => {
+                      const current =
+                        emoji === (iconTarget === 'new' ? newCategoryEmoji : iconTarget.emoji);
+                      return (
+                        <Pressable
+                          key={emoji}
+                          onPress={() => pickEmoji(emoji)}
+                          style={({ pressed }) => [
+                            styles.iconCell,
+                            { backgroundColor: theme.backgroundElement },
+                            current && { borderColor: accent, borderWidth: 2 },
+                            pressed && { opacity: 0.6 },
+                          ]}>
+                          <ThemedText style={styles.iconCellEmoji}>{emoji}</ThemedText>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </ScrollView>
+              </>
+            ) : (
+              <>
+                <ThemedText type="smallBold" style={styles.catSheetTitle}>
+                  {type === 'in' ? 'Income category' : 'Expense category'}
+                </ThemedText>
+
+                {/* Search */}
+                <View style={[styles.searchRow, { backgroundColor: theme.backgroundElement }]}>
+                  <MaterialIcons name="search" size={20} color={theme.textSecondary} />
+                  <TextInput
+                    value={catSearch}
+                    onChangeText={setCatSearch}
+                    placeholder={
+                      type === 'in' ? 'Search income categories' : 'Search expense categories'
+                    }
+                    placeholderTextColor={theme.textSecondary}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    style={[styles.searchInput, { color: theme.text }]}
+                  />
+                  {catSearch.length > 0 && (
+                    <Pressable onPress={() => setCatSearch('')} hitSlop={8}>
+                      <MaterialIcons name="close" size={20} color={theme.textSecondary} />
+                    </Pressable>
+                  )}
+                </View>
+
+                {addingCategory ? (
+                  <View style={[styles.addRow, { backgroundColor: theme.backgroundElement }]}>
+                    <Pressable onPress={() => setIconTarget('new')} hitSlop={6}>
+                      <ThemedText style={styles.optionEmoji}>{newCategoryEmoji}</ThemedText>
+                    </Pressable>
+                    <TextInput
+                      value={newCategory}
+                      onChangeText={setNewCategory}
+                      placeholder="New category name"
+                      placeholderTextColor={theme.textSecondary}
+                      style={[styles.addInput, { color: theme.text }]}
+                      autoFocus
+                      onSubmitEditing={saveNewCategory}
+                      returnKeyType="done"
+                    />
+                    <Pressable onPress={saveNewCategory} hitSlop={8}>
+                      <ThemedText type="smallBold" style={{ color: accent }}>
+                        Add
+                      </ThemedText>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <Pressable onPress={startAddingCategory} style={styles.optionRow}>
+                    <MaterialIcons name="add" size={22} color={accent} style={styles.optionIcon} />
+                    <ThemedText style={[styles.optionName, { color: accent }]}>
+                      {catSearch.trim() ? `Add “${catSearch.trim()}”` : 'Add new category'}
+                    </ThemedText>
+                  </Pressable>
+                )}
+
+                <ThemedText type="small" themeColor="textSecondary" style={styles.catHint}>
+                  Tap a category’s icon to change it, or hold a category to rename it.
+                </ThemedText>
+
+                <ScrollView
+                  style={styles.catList}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}>
+                  {visibleCategories.length === 0 ? (
+                    <ThemedText type="small" themeColor="textSecondary" style={styles.catEmpty}>
+                      No categories match “{catSearch.trim()}”.
+                    </ThemedText>
+                  ) : (
+                    visibleCategories.map((cat) => {
+                      const selected = cat.name === category;
+
+                      if (cat.id === renamingId) {
+                        return (
+                          <View
+                            key={cat.id}
+                            style={[
+                              styles.optionRow,
+                              styles.renameRow,
+                              { backgroundColor: theme.backgroundElement },
+                            ]}>
+                            <Pressable onPress={() => setIconTarget(cat)} hitSlop={8}>
+                              <ThemedText style={styles.optionEmoji}>{cat.emoji}</ThemedText>
+                            </Pressable>
+                            <TextInput
+                              value={renameText}
+                              onChangeText={setRenameText}
+                              placeholder="Category name"
+                              placeholderTextColor={theme.textSecondary}
+                              style={[styles.addInput, { color: theme.text }]}
+                              autoFocus
+                              selectTextOnFocus
+                              onSubmitEditing={() => saveRename(cat)}
+                              returnKeyType="done"
+                            />
+                            <Pressable onPress={cancelRename} hitSlop={8}>
+                              <ThemedText type="smallBold" themeColor="textSecondary">
+                                Cancel
+                              </ThemedText>
+                            </Pressable>
+                            <Pressable onPress={() => saveRename(cat)} hitSlop={8}>
+                              <ThemedText type="smallBold" style={{ color: accent }}>
+                                Save
+                              </ThemedText>
+                            </Pressable>
+                          </View>
+                        );
+                      }
+
+                      return (
+                        <Pressable
+                          key={cat.id}
+                          onPress={() => {
+                            setCategory(cat.name);
+                            closeCatMenu();
+                          }}
+                          onLongPress={() => startRename(cat)}
+                          delayLongPress={350}
+                          style={styles.optionRow}>
+                          <Pressable
+                            onPress={() => setIconTarget(cat)}
+                            onLongPress={() => startRename(cat)}
+                            delayLongPress={350}
+                            hitSlop={8}
+                            style={({ pressed }) => [
+                              styles.optionEmojiBtn,
+                              { backgroundColor: theme.backgroundElement },
+                              pressed && { opacity: 0.6 },
+                            ]}>
+                            <ThemedText style={styles.optionEmoji}>{cat.emoji}</ThemedText>
+                          </Pressable>
+                          <ThemedText style={styles.optionName}>{cat.name}</ThemedText>
+                          {selected && <MaterialIcons name="check" size={20} color={accent} />}
+                        </Pressable>
+                      );
+                    })
+                  )}
+                </ScrollView>
+              </>
+            )}
           </Pressable>
         </Pressable>
       </Modal>
@@ -529,6 +726,7 @@ const styles = StyleSheet.create({
   },
   catList: {
     flexGrow: 0,
+    flexShrink: 1,
   },
   optionRow: {
     flexDirection: 'row',
@@ -541,6 +739,73 @@ const styles = StyleSheet.create({
     width: 28,
     fontSize: 18,
     textAlign: 'center',
+  },
+  renameRow: {
+    borderRadius: Spacing.two,
+    paddingVertical: Spacing.one,
+  },
+  optionEmojiBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    borderRadius: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    marginBottom: Spacing.one,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    paddingVertical: Spacing.three,
+  },
+  catHint: {
+    paddingHorizontal: Spacing.two,
+    paddingBottom: Spacing.one,
+  },
+  catEmpty: {
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.four,
+  },
+  iconHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+    marginBottom: Spacing.two,
+  },
+  iconBack: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconTitle: {
+    flex: 1,
+  },
+  iconGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.one,
+    paddingBottom: Spacing.two,
+  },
+  iconCell: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconCellEmoji: {
+    fontSize: 24,
+    lineHeight: 30,
   },
   optionIcon: {
     width: 28,

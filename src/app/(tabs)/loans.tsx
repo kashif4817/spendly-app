@@ -1,6 +1,7 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useRouter, type Href } from 'expo-router';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AddButton } from '@/components/add-button';
@@ -13,24 +14,38 @@ import { useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
 import { formatRelativeDay } from '@/lib/date';
 import { formatMoney } from '@/lib/money';
+import { useSync } from '@/sync/provider';
 
 const SETTLED_EPSILON = 0.005;
 
 export default function PeopleScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const { status } = useSync();
 
   const people = useQuery(() => getPeople());
   const totals = useQuery(() => getLedgerTotals());
+
+  // People come from the local database, which mirrors the cloud, so searching
+  // returns the same results whether or not there's a connection.
+  const [search, setSearch] = useState('');
+  const query = search.trim().toLowerCase();
+
+  const filtered = useMemo(
+    () => (query ? people.filter((p) => p.person.toLowerCase().includes(query)) : people),
+    [people, query]
+  );
 
   return (
     <ThemedView style={styles.container}>
       <SafeAreaView edges={['top']} style={styles.safeArea}>
         <FlatList
-          data={people}
+          data={filtered}
           keyExtractor={(item) => item.person}
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           ListHeaderComponent={
             <View style={styles.header}>
               <ThemedText type="title" style={styles.title}>
@@ -57,6 +72,37 @@ export default function PeopleScreen() {
                   </ThemedText>
                 </View>
               </View>
+
+              <View style={[styles.searchBar, { backgroundColor: theme.backgroundElement }]}>
+                <MaterialIcons name="search" size={20} color={theme.textSecondary} />
+                <TextInput
+                  value={search}
+                  onChangeText={setSearch}
+                  placeholder="Search people"
+                  placeholderTextColor={theme.textSecondary}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="search"
+                  accessibilityLabel="Search people"
+                  style={[styles.searchInput, { color: theme.text }]}
+                />
+                {search.length > 0 && (
+                  <Pressable
+                    onPress={() => setSearch('')}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear search">
+                    <MaterialIcons name="close" size={20} color={theme.textSecondary} />
+                  </Pressable>
+                )}
+              </View>
+
+              {query.length > 0 && (
+                <ThemedText type="small" themeColor="textSecondary" style={styles.searchMeta}>
+                  {filtered.length} of {people.length} {people.length === 1 ? 'person' : 'people'}
+                  {status === 'offline' ? ' · offline, searching saved data' : ''}
+                </ThemedText>
+              )}
             </View>
           }
           renderItem={({ item }) => (
@@ -68,13 +114,23 @@ export default function PeopleScreen() {
             />
           )}
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <ThemedText style={styles.emptyEmoji}>🤝</ThemedText>
-              <ThemedText type="smallBold">No loans yet</ThemedText>
-              <ThemedText type="small" themeColor="textSecondary" style={styles.emptyHint}>
-                Tap “＋ Add” to record money you gave to or took from someone.
-              </ThemedText>
-            </View>
+            query.length > 0 ? (
+              <View style={styles.empty}>
+                <ThemedText style={styles.emptyEmoji}>🔍</ThemedText>
+                <ThemedText type="smallBold">No matches</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary" style={styles.emptyHint}>
+                  Nobody named “{search.trim()}” in your loans.
+                </ThemedText>
+              </View>
+            ) : (
+              <View style={styles.empty}>
+                <ThemedText style={styles.emptyEmoji}>🤝</ThemedText>
+                <ThemedText type="smallBold">No loans yet</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary" style={styles.emptyHint}>
+                  Tap “＋ Add” to record money you gave to or took from someone.
+                </ThemedText>
+              </View>
+            )
           }
         />
       </SafeAreaView>
@@ -163,6 +219,23 @@ const styles = StyleSheet.create({
   tileValue: {
     fontSize: 22,
     fontWeight: '700',
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    borderRadius: 12,
+    paddingHorizontal: Spacing.three,
+    marginBottom: Spacing.two,
+  },
+  searchInput: {
+    flex: 1,
+    paddingVertical: Spacing.three,
+    fontSize: 16,
+  },
+  searchMeta: {
+    marginTop: -Spacing.one,
+    marginBottom: Spacing.two,
   },
   card: {
     flexDirection: 'row',
