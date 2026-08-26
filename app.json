@@ -8,9 +8,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
-    "runtimeVersion": {
-      "policy": "fingerprint"
-    },
+    "runtimeVersion": "ee3409d627dcde7839cb6d8eb2b11c176c9e7549",
     "updates": {
       "enabled": true,
       "url": "https://u.expo.dev/6ac93557-ae8d-49bf-8516-96ab9e3499a8",
