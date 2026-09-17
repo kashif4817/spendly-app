@@ -17,21 +17,51 @@ import {
   getOutbox,
   getRowForUpload,
   getSyncCursor,
+  isSharedTable,
   removeOutboxEntry,
   setSyncCursor,
   SYNC_TABLES,
-  type SyncTable,
+  type AnyTable,
 } from '@/db';
 import { supabase } from '@/lib/supabase';
 import { isSyncConfigured, PULL_BATCH_SIZE } from '@/sync/config';
+import { pullShared } from '@/sync/shared';
+
+/**
+ * True when Supabase says the table itself isn't there.
+ *
+ * A table added by an app update only exists in the project once its SQL has
+ * been run (see supabase/*.sql). Until then we skip that table rather than fail
+ * the cycle — otherwise one missing table would stop *all* data syncing, and
+ * an over-the-air update could reach a device before the backend is ready.
+ * Queued changes stay in the outbox and go up once the table appears.
+ */
+function isMissingTable(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  // 42P01 = undefined_table (Postgres); PGRST205 = unknown table (PostgREST cache).
+  if (error.code === '42P01' || error.code === 'PGRST205') return true;
+  const message = (error.message ?? '').toLowerCase();
+  return message.includes('does not exist') || message.includes('schema cache');
+}
 
 /** Build the row object to upload, forcing the owner and a live (non-deleted) state. */
-function buildUploadRow(table: SyncTable, local: Record<string, any>, userId: string) {
+function buildUploadRow(table: AnyTable, local: Record<string, any>, userId: string) {
   const row: Record<string, any> = {};
   for (const col of columnsFor(table)) row[col] = local[col];
-  row.user_id = userId;
+  // Shared rows belong to a book, not to one account, so they carry no
+  // `user_id`; the server ties them to you through `author_id` instead.
+  if (!isSharedTable(table)) row.user_id = userId;
   row.deleted = false;
   return row;
+}
+
+/**
+ * The column naming who may change a row. On personal tables that's the owner;
+ * on shared tables only the author can touch their own entry, which is what
+ * stops either member rewriting the other's record.
+ */
+function ownerColumn(table: AnyTable): string {
+  return isSharedTable(table) ? 'author_id' : 'user_id';
 }
 
 /** Send queued local changes to Supabase. Stops (returns false) on the first error. */
@@ -46,8 +76,11 @@ async function push(userId: string): Promise<boolean> {
         .from(table)
         .update({ deleted: true, updated_at: new Date().toISOString() })
         .eq('id', entry.row_id)
-        .eq('user_id', userId);
-      if (error) return false;
+        .eq(ownerColumn(table), userId);
+      if (error) {
+        if (isMissingTable(error)) continue; // leave it queued for later
+        return false;
+      }
     } else {
       const local = getRowForUpload(table, entry.row_id);
       if (!local) {
@@ -56,7 +89,10 @@ async function push(userId: string): Promise<boolean> {
         continue;
       }
       const { error } = await supabase.from(table).upsert(buildUploadRow(table, local, userId));
-      if (error) return false;
+      if (error) {
+        if (isMissingTable(error)) continue; // leave it queued for later
+        return false;
+      }
     }
 
     removeOutboxEntry(entry.seq);
@@ -83,7 +119,10 @@ async function pull(userId: string): Promise<boolean> {
       if (pageCursor) query = query.gt('updated_at', pageCursor);
 
       const { data, error } = await query;
-      if (error) return false;
+      if (error) {
+        if (isMissingTable(error)) break; // skip this table, keep syncing the rest
+        return false;
+      }
       if (!data || data.length === 0) break;
 
       applyRemoteRows(table, data as any);
@@ -100,12 +139,19 @@ async function pull(userId: string): Promise<boolean> {
   return true;
 }
 
-/** Run one full push-then-pull cycle for the signed-in user. */
+/**
+ * Run one full cycle for the signed-in user: push, pull the personal tables,
+ * then pull the shared ones.
+ *
+ * The shared lane runs last and its result is folded in, so a project without
+ * shared-books.sql installed still syncs everything else normally.
+ */
 export async function runSync(userId: string): Promise<boolean> {
   if (!isSyncConfigured()) return false;
   try {
     if (!(await push(userId))) return false;
-    return await pull(userId);
+    if (!(await pull(userId))) return false;
+    return await pullShared();
   } catch {
     return false; // network blip / offline — try again later
   }

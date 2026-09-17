@@ -30,6 +30,7 @@ import { ensureDefaultReminder } from '@/lib/notifications';
 import { avatarUrl as getSignedAvatarUrl, getAvatarPath, upsertProfile } from '@/lib/profile';
 import { supabase } from '@/lib/supabase';
 import { runSync } from '@/sync/engine';
+import { startRealtime, stopRealtime } from '@/sync/realtime';
 import { readCachedUser } from '@/sync/session-cache';
 
 /** How often to retry a sync while the app is foregrounded (catches reconnects). */
@@ -85,6 +86,9 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const busy = useRef(false);
   // The Google account photo, used as the avatar until the user uploads one.
   const googlePicture = useRef<string | null>(null);
+  // Lets the realtime channel trigger a catch-up pull without being rebuilt
+  // every time `sync` is recreated.
+  const syncRef = useRef<(() => Promise<boolean>) | null>(null);
 
   // Stable: reads the active user from the db module, so it never goes stale
   // inside long-lived listeners.
@@ -102,6 +106,12 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       busy.current = false;
     }
   }, []);
+
+  // Kept in a ref (via an effect, not during render — the React Compiler is on)
+  // so the realtime channel can trigger a catch-up pull without being rebuilt.
+  useEffect(() => {
+    syncRef.current = sync;
+  }, [sync]);
 
   const reloadAvatar = useCallback(async () => {
     const uid = getCurrentUserId();
@@ -123,6 +133,11 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
    */
   const applyIdentity = useCallback((user: User) => {
     setCurrentUserId(user.id);
+    // Shared books go live as soon as we know who we are. Realtime only
+    // delivers what RLS allows, so the session must be in place first.
+    startRealtime(() => {
+      syncRef.current?.();
+    });
     // Show the Google account photo right away; reloadAvatar() upgrades to an
     // uploaded avatar if the user has set one.
     googlePicture.current = metaString(user, 'avatar_url', 'picture');
@@ -233,7 +248,15 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   // and a periodic retry so offline changes go up when the connection returns.
   useEffect(() => {
     const appSub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') sync();
+      if (s === 'active') {
+        sync();
+        // A socket rarely survives a spell in the background. Reopening it
+        // triggers a pull, which covers anything missed while it was down.
+        if (getCurrentUserId()) startRealtime(() => void sync());
+      } else {
+        // Don't hold a websocket open behind the user's back.
+        stopRealtime();
+      }
     });
     const timer = setInterval(sync, SYNC_INTERVAL_MS);
 
@@ -266,6 +289,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   }, [establishAccount]);
 
   const logOut = useCallback(async () => {
+    stopRealtime();
     await googleSignOut();
     try {
       await supabase.auth.signOut();

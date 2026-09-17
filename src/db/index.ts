@@ -75,14 +75,79 @@ export type LedgerEntry = {
 export type PersonBalance = {
   person: string;
   balance: number; // >0 they owe you, <0 you owe them
+  gave: number; // total you handed over
+  took: number; // total you received
   entries: number;
   lastDay: string;
+  pinned: number; // 1 = kept at the top of the people list
+  archived: number; // 1 = hidden from the main list
+};
+
+/** Per-person display flags. Stored in their own synced table (see person_flags). */
+export type PersonFlags = {
+  pinned: boolean;
+  archived: boolean;
 };
 
 /** Totals across everyone. */
 export type LedgerTotals = {
   receivable: number; // sum of positive balances
   payable: number; // sum of |negative balances|
+};
+
+// --- Shared books -----------------------------------------------------------
+// A shared book is one ledger two accounts both read and both write.
+//
+// An entry records WHO PAID, never "gave"/"took": gave/took is relative to
+// whoever is looking, so it would mean opposite things on the two phones.
+// `payer_id` is absolute, so both devices hold the identical row and each one
+// works out the sign for its own user. See supabase/shared-books.sql.
+
+export type SharedBook = {
+  id: string;
+  name: string;
+  owner_id: string;
+  join_code: string | null;
+  code_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SharedMember = {
+  id: string;
+  book_id: string;
+  user_id: string;
+  joined_at: string;
+};
+
+export type SharedEntry = {
+  id: string;
+  book_id: string;
+  author_id: string; // who typed it in
+  payer_id: string; // who actually handed over the money
+  amount: number;
+  note: string;
+  day: string;
+  created_at: string;
+  updated_at: string;
+};
+
+/** A shared book rolled up for the people list. */
+export type SharedBookSummary = {
+  id: string;
+  name: string;
+  /** The other member's id, or null while you're the only one in the book. */
+  otherUserId: string | null;
+  otherName: string | null;
+  balance: number; // >0 they owe you, <0 you owe them
+  gave: number; // total you paid
+  took: number; // total they paid
+  entries: number;
+  lastDay: string;
+  pinned: number; // 1 = kept at the top of the people list
+  archived: number; // 1 = hidden from the main list
+  /** True while nobody has redeemed the join code yet. */
+  pending: boolean;
 };
 
 /** Sentinel category for the overall (all-spending) monthly budget. */
@@ -138,9 +203,36 @@ export const SYNC_TABLES = [
   'loan_payments',
   'budgets',
   'ledger_entries',
+  'person_flags',
 ] as const;
 
 export type SyncTable = (typeof SYNC_TABLES)[number];
+
+/**
+ * Tables belonging to shared books. They are scoped by MEMBERSHIP rather than
+ * by owner, so they can't join SYNC_TABLES — that list's queries all assume a
+ * `user_id` column naming a single owner. They sync on their own lane with
+ * their own cursor; see sync/engine.ts.
+ *
+ * Only `shared_entries` is ever pushed. Creating a book, joining one and
+ * rotating a code all run as server-side functions, so there is nothing else
+ * for a client to upload — which also means one less way to trip over RLS.
+ */
+export const SHARED_TABLES = ['shared_books', 'shared_book_members', 'shared_entries'] as const;
+
+export type SharedTable = (typeof SHARED_TABLES)[number];
+
+export type AnyTable = SyncTable | SharedTable;
+
+export const SHARED_TABLE_COLUMNS: Record<SharedTable, string[]> = {
+  shared_books: ['name', 'owner_id', 'join_code', 'code_expires_at', 'created_at'],
+  shared_book_members: ['book_id', 'user_id', 'joined_at'],
+  shared_entries: ['book_id', 'author_id', 'payer_id', 'amount', 'note', 'day', 'created_at'],
+};
+
+export function isSharedTable(table: AnyTable): table is SharedTable {
+  return (SHARED_TABLES as readonly string[]).includes(table);
+}
 
 /** Data columns per table (excludes the common id / user_id / updated_at). */
 export const TABLE_COLUMNS: Record<SyncTable, string[]> = {
@@ -150,10 +242,15 @@ export const TABLE_COLUMNS: Record<SyncTable, string[]> = {
   loan_payments: ['loan_id', 'amount', 'day', 'created_at'],
   budgets: ['category', 'amount'],
   ledger_entries: ['person', 'direction', 'amount', 'note', 'day', 'created_at'],
+  person_flags: ['person', 'pinned', 'archived'],
 };
 
-/** All columns for a table, in a stable order (id first, updated_at last). */
-export function columnsFor(table: SyncTable): string[] {
+/**
+ * All columns for a table, in a stable order (id first, updated_at last).
+ * Shared tables have no single owner, so they carry no `user_id` of their own.
+ */
+export function columnsFor(table: AnyTable): string[] {
+  if (isSharedTable(table)) return ['id', ...SHARED_TABLE_COLUMNS[table], 'updated_at'];
   return ['id', 'user_id', ...TABLE_COLUMNS[table], 'updated_at'];
 }
 
@@ -176,7 +273,7 @@ export function getCurrentUserId(): string | null {
 // live-refresh hook (see db/hooks.ts).
 const db = SQLite.openDatabaseSync('expenses.db', { enableChangeListener: true });
 
-const DATABASE_VERSION = 6;
+const DATABASE_VERSION = 8;
 
 let dbInitError: string | null = null;
 
@@ -222,6 +319,13 @@ function createMetaTables(): void {
     );
     INSERT OR IGNORE INTO sync_state (id, user_id, last_pulled_at) VALUES (1, NULL, NULL);
   `);
+
+  // Shared books pull on their own lane, so they need their own cursor. Added
+  // here rather than in a versioned step because createMetaTables() runs before
+  // the version check — the outbox must exist even when migrate() early-returns.
+  if (!hasColumn('sync_state', 'shared_pulled_at')) {
+    db.execSync('ALTER TABLE sync_state ADD COLUMN shared_pulled_at TEXT');
+  }
 }
 
 /** The five synced data tables, with UUID ids + user_id + updated_at. */
@@ -286,6 +390,80 @@ function createDataTables(): void {
     );
   `);
   createLedgerTable();
+  createPersonFlagsTable();
+  createSharedTables();
+}
+
+/**
+ * The shared-book tables (also created on their own for the v7 → v8 upgrade).
+ *
+ * `shared_profiles` is a local-only cache of who the other member is — names
+ * live in `public.profiles` on the server, and copying them down means an
+ * entry still says "Bilal paid" rather than a bare uuid while offline.
+ */
+function createSharedTables(): void {
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS shared_books (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      owner_id TEXT NOT NULL,
+      join_code TEXT,
+      code_expires_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS shared_book_members (
+      id TEXT PRIMARY KEY NOT NULL,
+      book_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      joined_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (book_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS shared_entries (
+      id TEXT PRIMARY KEY NOT NULL,
+      book_id TEXT NOT NULL,
+      author_id TEXT NOT NULL,
+      payer_id TEXT NOT NULL,
+      amount REAL NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      day TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_shared_entries_book ON shared_entries(book_id);
+
+    CREATE TABLE IF NOT EXISTS shared_profiles (
+      user_id TEXT PRIMARY KEY NOT NULL,
+      name TEXT,
+      email TEXT,
+      updated_at TEXT NOT NULL
+    );
+  `);
+}
+
+/**
+ * Per-person pin / archive flags (also created on its own for the v6 → v7
+ * upgrade). There is no "people" table — a person is just a name that appears
+ * in `ledger_entries` — so this holds the extra state a person can carry.
+ *
+ * The id is derived from the name rather than random, so two devices that pin
+ * the same person independently produce the SAME row instead of duplicates.
+ */
+function createPersonFlagsTable(): void {
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS person_flags (
+      id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL DEFAULT '',
+      person TEXT NOT NULL,
+      pinned INTEGER NOT NULL DEFAULT 0,
+      archived INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      UNIQUE (person)
+    );
+  `);
 }
 
 /** The people-ledger table (also created on its own for the v5 → v6 upgrade). */
@@ -464,7 +642,7 @@ export function migrate(): void {
     // Fresh install → create the current schema directly. Preset categories are
     // NOT seeded here; they're seeded into a brand-new account on sign-up.
     createDataTables();
-    version = 6;
+    version = 8;
   } else {
     if (version < 4) {
       // Existing pre-sync database (integer ids) → migrate its data to the
@@ -486,6 +664,18 @@ export function migrate(): void {
       migrateLoansToLedger();
       version = 6;
     }
+    if (version === 6) {
+      // Introduce per-person pin / archive flags. Nothing to backfill — no
+      // flags means "not pinned, not archived", which is the old behaviour.
+      createPersonFlagsTable();
+      version = 7;
+    }
+    if (version === 7) {
+      // Introduce shared books. Empty until the user creates or joins one, so
+      // again there's nothing to backfill.
+      createSharedTables();
+      version = 8;
+    }
   }
 
   db.execSync(`PRAGMA user_version = ${DATABASE_VERSION}`);
@@ -494,7 +684,7 @@ export function migrate(): void {
 // --- Outbox -----------------------------------------------------------------
 
 /** Queue a change for the next push. Only the latest op per row is kept. */
-function enqueue(table: SyncTable, id: string, op: 'upsert' | 'delete', updatedAt: string): void {
+function enqueue(table: AnyTable, id: string, op: 'upsert' | 'delete', updatedAt: string): void {
   db.runSync('DELETE FROM sync_outbox WHERE table_name = ? AND row_id = ?', table, id);
   db.runSync(
     'INSERT INTO sync_outbox (table_name, row_id, op, updated_at) VALUES (?, ?, ?, ?)',
@@ -1032,16 +1222,233 @@ export function getLedgerEntry(id: string): LedgerEntry | null {
   return db.getFirstSync<LedgerEntry>('SELECT * FROM ledger_entries WHERE id = ?', id);
 }
 
-/** Every person with their rolled-up balance, most recently active first. */
+// --- Person flags (pin / archive) -------------------------------------------
+// A person has no row of their own — they exist because their name appears in
+// `ledger_entries`. `person_flags` hangs the extra per-person state off that
+// name, with an id derived from the name so every device agrees on the row.
+
+/**
+ * Shared books get their pin / archive flags from `person_flags` too, under a
+ * reserved key. A book isn't a person, but the flags are the same idea — your
+ * own view of a row — and reusing the table means they sync to your other
+ * devices for free instead of needing another table and another migration.
+ *
+ * The prefix can't collide with a real name: `createPerson` and `renamePerson`
+ * both reject it, and `getPeople` / `findPerson` filter it out.
+ */
+export const BOOK_FLAG_PREFIX = '#book:';
+
+export const bookFlagKey = (bookId: string): string => `${BOOK_FLAG_PREFIX}${bookId}`;
+
+/** The stable row id for a person's flags. Derived, never random. */
+function personFlagId(person: string): string {
+  return `PF-${person.trim()}`;
+}
+
+/** Write one or both flags for a person, creating the row on first use. */
+function setPersonFlags(person: string, patch: Partial<PersonFlags>): void {
+  const name = person.trim();
+  if (!name) return;
+
+  const id = personFlagId(name);
+  const updatedAt = nowIso();
+  const current = getPersonFlags(name);
+  const pinned = (patch.pinned ?? current.pinned) ? 1 : 0;
+  const archived = (patch.archived ?? current.archived) ? 1 : 0;
+
+  // Clear any stray row for the same person under a different id, so the
+  // UNIQUE (person) constraint can never block the upsert below. Queue the
+  // removal too, otherwise the next pull would just bring the stray back.
+  const strays = db.getAllSync<{ id: string }>(
+    'SELECT id FROM person_flags WHERE person = ? AND id <> ?',
+    name, id
+  );
+  for (const stray of strays) {
+    db.runSync('DELETE FROM person_flags WHERE id = ?', stray.id);
+    enqueue('person_flags', stray.id, 'delete', updatedAt);
+  }
+  db.runSync(
+    `INSERT INTO person_flags (id, user_id, person, pinned, archived, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT (id) DO UPDATE SET
+       pinned = excluded.pinned,
+       archived = excluded.archived,
+       updated_at = excluded.updated_at`,
+    id, currentUserId ?? '', name, pinned, archived, updatedAt
+  );
+  enqueue('person_flags', id, 'upsert', updatedAt);
+}
+
+/** Keep a person at the top of the people list (or stop doing so). */
+export function setPersonPinned(person: string, pinned: boolean): void {
+  setPersonFlags(person, { pinned });
+}
+
+/**
+ * Hide a person from the main list. Archiving never deletes anything — their
+ * entries and balance are untouched, they just move to the Archived view. A
+ * person is also unpinned when archived, since the two make no sense together.
+ */
+export function setPersonArchived(person: string, archived: boolean): void {
+  setPersonFlags(person, archived ? { archived: true, pinned: false } : { archived: false });
+}
+
+/** A person's current flags. Missing row = not pinned, not archived. */
+export function getPersonFlags(person: string): PersonFlags {
+  const row = db.getFirstSync<{ pinned: number; archived: number }>(
+    'SELECT pinned, archived FROM person_flags WHERE person = ?',
+    person.trim()
+  );
+  return { pinned: !!row?.pinned, archived: !!row?.archived };
+}
+
+/** Wipe every flags row for a name, remembering the deletes for the server. */
+function dropPersonFlags(person: string, updatedAt: string): void {
+  const rows = db.getAllSync<{ id: string }>(
+    'SELECT id FROM person_flags WHERE person = ?',
+    person
+  );
+  for (const row of rows) {
+    db.runSync('DELETE FROM person_flags WHERE id = ?', row.id);
+    enqueue('person_flags', row.id, 'delete', updatedAt);
+  }
+}
+
+// --- People CRUD ------------------------------------------------------------
+// A person is still just a name, so these work on the name across both tables:
+// their entries in `ledger_entries` and their flags row in `person_flags`.
+
+/**
+ * The stored spelling of a name, ignoring case, or null if nobody goes by it.
+ * Use this before creating or renaming so "Ali" and "ali" can't become two
+ * people whose balances each tell half the story.
+ */
+export function findPerson(person: string): string | null {
+  const name = person.trim();
+  if (!name) return null;
+  const row = db.getFirstSync<{ person: string }>(
+    `SELECT person FROM (
+       SELECT person FROM ledger_entries
+       UNION
+       SELECT person FROM person_flags WHERE person NOT LIKE '#book:%'
+     ) WHERE person = ? COLLATE NOCASE
+     LIMIT 1`,
+    name
+  );
+  return row?.person ?? null;
+}
+
+/**
+ * Put a name on the people list before any money changes hands. Backed by a
+ * `person_flags` row, which is what makes an entry-less person exist at all.
+ *
+ * Throws if the name is blank or already taken, so the caller can show why.
+ */
+export function createPerson(person: string): string {
+  const name = person.trim();
+  if (!name) throw new Error('Enter a name.');
+  if (name.startsWith(BOOK_FLAG_PREFIX)) throw new Error('That name isn’t allowed.');
+
+  const existing = findPerson(name);
+  if (existing) throw new Error(`${existing} is already on your list.`);
+
+  setPersonFlags(name, {});
+  notifyDbChanged();
+  return name;
+}
+
+/**
+ * Rename a person everywhere at once: every entry of theirs plus their flags.
+ * Changing only the capitalisation is fine; taking someone else's name is not,
+ * since that would silently merge two accounts into one.
+ */
+export function renamePerson(from: string, to: string): string {
+  const oldName = from.trim();
+  const newName = to.trim();
+  if (!newName) throw new Error('Enter a name.');
+  if (newName.startsWith(BOOK_FLAG_PREFIX)) throw new Error('That name isn’t allowed.');
+  if (!oldName || oldName === newName) return newName;
+
+  const clash = findPerson(newName);
+  if (clash && clash.toLowerCase() !== oldName.toLowerCase()) {
+    throw new Error(`${clash} is already on your list.`);
+  }
+
+  const flags = getPersonFlags(oldName);
+  const updatedAt = nowIso();
+  db.withTransactionSync(() => {
+    const moved = db.getAllSync<{ id: string }>(
+      'SELECT id FROM ledger_entries WHERE person = ?',
+      oldName
+    );
+    db.runSync(
+      'UPDATE ledger_entries SET person = ?, updated_at = ? WHERE person = ?',
+      newName, updatedAt, oldName
+    );
+    for (const row of moved) enqueue('ledger_entries', row.id, 'upsert', updatedAt);
+
+    // The flags id is derived from the name, so the row is replaced rather
+    // than edited — otherwise the old id would linger and drag the old name
+    // back on the next pull.
+    dropPersonFlags(oldName, updatedAt);
+    setPersonFlags(newName, flags);
+  });
+  notifyDbChanged();
+  return newName;
+}
+
+/**
+ * Remove a person and every entry of theirs, on this device and the server.
+ * There is no undo — an outstanding balance just disappears — so callers are
+ * expected to warn first (see the people screen).
+ */
+export function deletePerson(person: string): void {
+  const name = person.trim();
+  if (!name) return;
+
+  const updatedAt = nowIso();
+  db.withTransactionSync(() => {
+    const entries = db.getAllSync<{ id: string }>(
+      'SELECT id FROM ledger_entries WHERE person = ?',
+      name
+    );
+    db.runSync('DELETE FROM ledger_entries WHERE person = ?', name);
+    for (const entry of entries) enqueue('ledger_entries', entry.id, 'delete', updatedAt);
+    dropPersonFlags(name, updatedAt);
+  });
+  notifyDbChanged();
+}
+
+/**
+ * Every person with their rolled-up balance: pinned first, then most recently
+ * active. Archived people are included — callers filter on `archived` so the
+ * Archived view can be built from the same query.
+ *
+ * The names come from the ledger *and* from `person_flags`, so someone added
+ * by hand shows up right away with an empty statement instead of waiting for
+ * their first entry. Such a person has `entries: 0` and an empty `lastDay`,
+ * and sorts to the top rather than the bottom — they were just added, so
+ * that's where the user is looking for them.
+ */
 export function getPeople(): PersonBalance[] {
   return db.getAllSync<PersonBalance>(
-    `SELECT person,
-       SUM(CASE WHEN direction = 'gave' THEN amount ELSE -amount END) AS balance,
-       COUNT(*) AS entries,
-       MAX(day) AS lastDay
-     FROM ledger_entries
-     GROUP BY person
-     ORDER BY lastDay DESC, person ASC`
+    `SELECT p.person AS person,
+       COALESCE(SUM(CASE WHEN e.direction = 'gave' THEN e.amount ELSE -e.amount END), 0) AS balance,
+       COALESCE(SUM(CASE WHEN e.direction = 'gave' THEN e.amount END), 0) AS gave,
+       COALESCE(SUM(CASE WHEN e.direction = 'took' THEN e.amount END), 0) AS took,
+       COUNT(e.id) AS entries,
+       COALESCE(MAX(e.day), '') AS lastDay,
+       COALESCE(MAX(f.pinned), 0) AS pinned,
+       COALESCE(MAX(f.archived), 0) AS archived
+     FROM (
+       SELECT person FROM ledger_entries
+       UNION
+       SELECT person FROM person_flags WHERE person NOT LIKE '#book:%'
+     ) p
+     LEFT JOIN ledger_entries e ON e.person = p.person
+     LEFT JOIN person_flags f ON f.person = p.person
+     GROUP BY p.person
+     ORDER BY pinned DESC, COALESCE(MAX(e.day), '9999-99-99') DESC, person ASC`
   );
 }
 
@@ -1077,18 +1484,277 @@ export function getLedgerPeriodTotals(startDay: string, endDay: string): { gave:
   return { gave: row?.gave ?? 0, took: row?.took ?? 0 };
 }
 
-/** Total receivable / payable across everyone. */
-export function getLedgerTotals(): LedgerTotals {
+/**
+ * Total receivable / payable across everyone.
+ *
+ * Archived people are left out by default, so archiving someone actually takes
+ * them off the headline figures. Pass `includeArchived` for the Archived view's
+ * own totals.
+ */
+export function getLedgerTotals(options?: { includeArchived?: boolean }): LedgerTotals {
+  const scope = options?.includeArchived
+    ? ''
+    : 'WHERE COALESCE(f.archived, 0) = 0';
   const row = db.getFirstSync<{ receivable: number; payable: number }>(
     `SELECT
        COALESCE(SUM(CASE WHEN balance > 0 THEN balance END), 0) AS receivable,
        COALESCE(SUM(CASE WHEN balance < 0 THEN -balance END), 0) AS payable
      FROM (
-       SELECT SUM(CASE WHEN direction = 'gave' THEN amount ELSE -amount END) AS balance
-       FROM ledger_entries GROUP BY person
+       SELECT SUM(CASE WHEN e.direction = 'gave' THEN e.amount ELSE -e.amount END) AS balance
+       FROM ledger_entries e
+       LEFT JOIN person_flags f ON f.person = e.person
+       ${scope}
+       GROUP BY e.person
      )`
   );
   return { receivable: row?.receivable ?? 0, payable: row?.payable ?? 0 };
+}
+
+// --- Shared books -----------------------------------------------------------
+// Local mirror of the shared tables. Everything here is a plain read/write of
+// the cache; getting the rows in and out of Supabase is sync/shared.ts's job.
+
+/** Store a book pulled down or returned by create_book / join_book. */
+export function upsertSharedBook(book: SharedBook): void {
+  db.runSync(
+    `INSERT OR REPLACE INTO shared_books
+       (id, name, owner_id, join_code, code_expires_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    book.id, book.name ?? '', book.owner_id, book.join_code ?? null,
+    book.code_expires_at ?? null, book.created_at, book.updated_at
+  );
+  notifyDbChanged();
+}
+
+export function getSharedBooks(): SharedBook[] {
+  return db.getAllSync<SharedBook>('SELECT * FROM shared_books ORDER BY created_at DESC');
+}
+
+export function getSharedBook(id: string): SharedBook | null {
+  return db.getFirstSync<SharedBook>('SELECT * FROM shared_books WHERE id = ?', id);
+}
+
+/** Forget a book locally — used after leaving one. */
+export function deleteSharedBookLocally(id: string): void {
+  const stamp = nowIso();
+  db.withTransactionSync(() => {
+    db.runSync('DELETE FROM shared_entries WHERE book_id = ?', id);
+    db.runSync('DELETE FROM shared_book_members WHERE book_id = ?', id);
+    db.runSync('DELETE FROM shared_books WHERE id = ?', id);
+    // Leave no orphan flags row behind to sync back and haunt the list.
+    dropPersonFlags(bookFlagKey(id), stamp);
+  });
+  notifyDbChanged();
+}
+
+/** Record a membership row (yours or the other member's). */
+export function upsertSharedMember(member: SharedMember & { updated_at?: string }): void {
+  db.runSync(
+    `INSERT OR REPLACE INTO shared_book_members (id, book_id, user_id, joined_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    member.id, member.book_id, member.user_id, member.joined_at,
+    member.updated_at ?? nowIso()
+  );
+  notifyDbChanged();
+}
+
+export function getBookMembers(bookId: string): SharedMember[] {
+  return db.getAllSync<SharedMember>(
+    'SELECT * FROM shared_book_members WHERE book_id = ? ORDER BY joined_at ASC',
+    bookId
+  );
+}
+
+/** Cache a member's display name so entries read "Bilal paid" even offline. */
+export function cacheSharedProfile(userId: string, name: string | null, email: string | null): void {
+  db.runSync(
+    'INSERT OR REPLACE INTO shared_profiles (user_id, name, email, updated_at) VALUES (?, ?, ?, ?)',
+    userId, name, email, nowIso()
+  );
+}
+
+/** Every member id across all books whose name we don't have yet. */
+export function getUncachedMemberIds(): string[] {
+  const rows = db.getAllSync<{ user_id: string }>(
+    `SELECT DISTINCT m.user_id FROM shared_book_members m
+     LEFT JOIN shared_profiles p ON p.user_id = m.user_id
+     WHERE p.user_id IS NULL`
+  );
+  return rows.map((r) => r.user_id);
+}
+
+/** A member's best available label: their name, then their email, then null. */
+export function getSharedMemberName(userId: string): string | null {
+  const row = db.getFirstSync<{ name: string | null; email: string | null }>(
+    'SELECT name, email FROM shared_profiles WHERE user_id = ?',
+    userId
+  );
+  return row?.name?.trim() || row?.email?.trim() || null;
+}
+
+export type SharedEntryInput = {
+  bookId: string;
+  /** Who handed over the money — you, or the other member. */
+  payerId: string;
+  amount: number;
+  note?: string;
+  day?: string;
+};
+
+/**
+ * Add an entry to a shared book. `author_id` is always you (the server enforces
+ * that), while `payer_id` may be either member — that's how you record "he paid
+ * for me" without needing him to be online.
+ */
+export function addSharedEntry(input: SharedEntryInput): string {
+  const id = newId();
+  const updatedAt = nowIso();
+  db.runSync(
+    `INSERT INTO shared_entries
+       (id, book_id, author_id, payer_id, amount, note, day, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    id, input.bookId, currentUserId ?? '', input.payerId, input.amount,
+    input.note ?? '', input.day ?? todayKey(), updatedAt, updatedAt
+  );
+  enqueue('shared_entries', id, 'upsert', updatedAt);
+  return id;
+}
+
+export function updateSharedEntry(id: string, input: Omit<SharedEntryInput, 'bookId'>): void {
+  const updatedAt = nowIso();
+  db.runSync(
+    `UPDATE shared_entries SET payer_id = ?, amount = ?, note = ?, day = ?, updated_at = ?
+     WHERE id = ?`,
+    input.payerId, input.amount, input.note ?? '', input.day ?? todayKey(), updatedAt, id
+  );
+  enqueue('shared_entries', id, 'upsert', updatedAt);
+}
+
+export function deleteSharedEntry(id: string): void {
+  db.runSync('DELETE FROM shared_entries WHERE id = ?', id);
+  enqueue('shared_entries', id, 'delete', nowIso());
+}
+
+export function getSharedEntry(id: string): SharedEntry | null {
+  return db.getFirstSync<SharedEntry>('SELECT * FROM shared_entries WHERE id = ?', id);
+}
+
+/** A book's entries, newest first. */
+export function getSharedEntries(bookId: string): SharedEntry[] {
+  return db.getAllSync<SharedEntry>(
+    'SELECT * FROM shared_entries WHERE book_id = ? ORDER BY day DESC, created_at DESC',
+    bookId
+  );
+}
+
+/**
+ * What the book comes to for the signed-in user:
+ *
+ *   balance = Σ(you paid) − Σ(they paid)
+ *
+ * so it reads positive when you're owed. Both devices run this same sum over
+ * the same rows and land on equal-and-opposite answers — which is the whole
+ * reason entries store `payer_id` instead of "gave"/"took".
+ */
+export function getSharedBalance(bookId: string, userId: string): number {
+  const row = db.getFirstSync<{ balance: number }>(
+    `SELECT COALESCE(SUM(CASE WHEN payer_id = ? THEN amount ELSE -amount END), 0) AS balance
+     FROM shared_entries WHERE book_id = ?`,
+    userId, bookId
+  );
+  return row?.balance ?? 0;
+}
+
+/** Keep a shared book at the top of the people list (or stop doing so). */
+export function setBookPinned(bookId: string, pinned: boolean): void {
+  setPersonFlags(bookFlagKey(bookId), { pinned });
+}
+
+/** Hide a shared book from the main list. Nothing is deleted or left. */
+export function setBookArchived(bookId: string, archived: boolean): void {
+  setPersonFlags(
+    bookFlagKey(bookId),
+    archived ? { archived: true, pinned: false } : { archived: false }
+  );
+}
+
+export function getBookFlags(bookId: string): PersonFlags {
+  return getPersonFlags(bookFlagKey(bookId));
+}
+
+/** Rename a book locally. The server copy is updated by sync/shared.ts. */
+export function renameSharedBookLocally(bookId: string, name: string): void {
+  db.runSync(
+    'UPDATE shared_books SET name = ?, updated_at = ? WHERE id = ?',
+    name.trim(), nowIso(), bookId
+  );
+  notifyDbChanged();
+}
+
+/** Drop a book's flags — used when leaving, so nothing is left behind. */
+export function clearBookFlags(bookId: string): void {
+  dropPersonFlags(bookFlagKey(bookId), nowIso());
+  notifyDbChanged();
+}
+
+/** Every shared book rolled up for the people list. */
+export function getSharedBookSummaries(userId: string): SharedBookSummary[] {
+  const books = db.getAllSync<{
+    id: string;
+    name: string;
+    balance: number;
+    gave: number;
+    took: number;
+    entries: number;
+    lastDay: string | null;
+  }>(
+    `SELECT b.id AS id,
+       b.name AS name,
+       COALESCE(SUM(CASE WHEN e.payer_id = ? THEN e.amount ELSE -e.amount END), 0) AS balance,
+       COALESCE(SUM(CASE WHEN e.payer_id = ? THEN e.amount END), 0) AS gave,
+       COALESCE(SUM(CASE WHEN e.payer_id <> ? THEN e.amount END), 0) AS took,
+       COUNT(e.id) AS entries,
+       MAX(e.day) AS lastDay
+     FROM shared_books b
+     LEFT JOIN shared_entries e ON e.book_id = b.id
+     GROUP BY b.id
+     ORDER BY lastDay DESC, b.created_at DESC`,
+    userId, userId, userId
+  );
+
+  return books.map((book) => {
+    const other = db.getFirstSync<{ user_id: string }>(
+      'SELECT user_id FROM shared_book_members WHERE book_id = ? AND user_id <> ? LIMIT 1',
+      book.id, userId
+    );
+    const flags = getBookFlags(book.id);
+    return {
+      id: book.id,
+      name: book.name,
+      otherUserId: other?.user_id ?? null,
+      otherName: other ? getSharedMemberName(other.user_id) : null,
+      balance: book.balance,
+      gave: book.gave,
+      took: book.took,
+      entries: book.entries,
+      lastDay: book.lastDay ?? '',
+      pinned: flags.pinned ? 1 : 0,
+      archived: flags.archived ? 1 : 0,
+      pending: !other,
+    };
+  });
+}
+
+/** The shared pull cursor. Separate from the personal one — different lane. */
+export function getSharedCursor(): string | null {
+  const row = db.getFirstSync<{ shared_pulled_at: string | null }>(
+    'SELECT shared_pulled_at FROM sync_state WHERE id = 1'
+  );
+  return row?.shared_pulled_at ?? null;
+}
+
+export function setSharedCursor(cursor: string | null): void {
+  db.runSync('UPDATE sync_state SET shared_pulled_at = ? WHERE id = 1', cursor);
 }
 
 // --- Account setup ----------------------------------------------------------
@@ -1123,8 +1789,16 @@ export function setSyncCursor(cursor: string | null): void {
 export function wipeLocalData(): void {
   db.withTransactionSync(() => {
     for (const table of SYNC_TABLES) db.execSync(`DELETE FROM ${table}`);
+    // Shared books belong to a membership, not to this device — a different
+    // account signing in must not inherit the last user's shared ledgers.
+    for (const table of SHARED_TABLES) db.execSync(`DELETE FROM ${table}`);
+    db.execSync('DELETE FROM shared_profiles');
     db.execSync('DELETE FROM sync_outbox');
-    db.runSync('UPDATE sync_state SET user_id = NULL, last_pulled_at = NULL WHERE id = 1');
+    db.runSync(
+      `UPDATE sync_state
+       SET user_id = NULL, last_pulled_at = NULL, shared_pulled_at = NULL
+       WHERE id = 1`
+    );
   });
   notifyDbChanged();
 }
@@ -1205,7 +1879,7 @@ export function seedMissingPresets(userId: string): number {
 
 type RemoteRow = Record<string, any> & { id: string; updated_at: string; deleted?: boolean };
 
-function localUpdatedAt(table: SyncTable, id: string): string | null {
+function localUpdatedAt(table: AnyTable, id: string): string | null {
   const row = db.getFirstSync<{ updated_at: string }>(
     `SELECT updated_at FROM ${table} WHERE id = ?`,
     id
@@ -1213,14 +1887,14 @@ function localUpdatedAt(table: SyncTable, id: string): string | null {
   return row?.updated_at ?? null;
 }
 
-function remoteIsNewer(table: SyncTable, id: string, remoteUpdatedAt: string): boolean {
+function remoteIsNewer(table: AnyTable, id: string, remoteUpdatedAt: string): boolean {
   const local = localUpdatedAt(table, id);
   if (!local) return true;
   return new Date(remoteUpdatedAt).getTime() >= new Date(local).getTime();
 }
 
 /** Apply a batch of pulled rows for a table, resolving conflicts by last-write-wins. */
-export function applyRemoteRows(table: SyncTable, rows: RemoteRow[]): void {
+export function applyRemoteRows(table: AnyTable, rows: RemoteRow[]): void {
   if (rows.length === 0) return;
   const cols = columnsFor(table);
   const placeholders = cols.map(() => '?').join(', ');
@@ -1254,7 +1928,7 @@ export function applyRemoteRows(table: SyncTable, rows: RemoteRow[]): void {
 }
 
 /** The rows currently queued for upload, oldest first. */
-export type OutboxEntry = { seq: number; table_name: SyncTable; row_id: string; op: 'upsert' | 'delete' };
+export type OutboxEntry = { seq: number; table_name: AnyTable; row_id: string; op: 'upsert' | 'delete' };
 
 export function getOutbox(): OutboxEntry[] {
   return db.getAllSync<OutboxEntry>(
@@ -1263,7 +1937,7 @@ export function getOutbox(): OutboxEntry[] {
 }
 
 /** Read a single row as a plain object for upload, or null if it's gone. */
-export function getRowForUpload(table: SyncTable, id: string): Record<string, any> | null {
+export function getRowForUpload(table: AnyTable, id: string): Record<string, any> | null {
   return db.getFirstSync<Record<string, any>>(`SELECT * FROM ${table} WHERE id = ?`, id);
 }
 

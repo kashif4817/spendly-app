@@ -1,14 +1,23 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Stack, useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useState } from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ActionSheet } from '@/components/action-sheet';
 import { ConfirmModal } from '@/components/confirm-modal';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
-import { addLedgerEntry, getPersonBalance, getPersonEntries } from '@/db';
+import {
+  addLedgerEntry,
+  getPersonBalance,
+  getPersonEntries,
+  getPersonFlags,
+  setPersonArchived,
+  setPersonPinned,
+} from '@/db';
 import { useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
 import { formatRelativeDay } from '@/lib/date';
@@ -22,7 +31,9 @@ export default function PersonScreen() {
 
   const entries = useQuery(() => getPersonEntries(person), [person]);
   const balance = useQuery(() => getPersonBalance(person), [person]);
+  const flags = useQuery(() => getPersonFlags(person), [person]);
   const [confirmSettle, setConfirmSettle] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const settled = Math.abs(balance) < 0.005;
   const owesYou = balance > 0;
@@ -44,7 +55,20 @@ export default function PersonScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <Stack.Screen options={{ title: person || 'Person' }} />
+      <Stack.Screen
+        options={{
+          title: person || 'Person',
+          headerRight: () => (
+            <Pressable
+              onPress={() => setMenuOpen(true)}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel={`Options for ${person}`}>
+              <MaterialIcons name="more-vert" size={22} color={theme.text} />
+            </Pressable>
+          ),
+        }}
+      />
       <SafeAreaView edges={['bottom']} style={styles.safeArea}>
         <FlatList
           data={entries}
@@ -126,6 +150,24 @@ export default function PersonScreen() {
           }
         />
       </SafeAreaView>
+
+      <ActionSheet
+        visible={menuOpen}
+        title={person}
+        actions={[
+          {
+            label: flags.pinned ? 'Unpin from top' : 'Pin to top',
+            icon: 'push-pin',
+            onPress: () => setPersonPinned(person, !flags.pinned),
+          },
+          {
+            label: flags.archived ? 'Unarchive' : 'Archive',
+            icon: flags.archived ? 'unarchive' : 'archive',
+            onPress: () => setPersonArchived(person, !flags.archived),
+          },
+        ]}
+        onClose={() => setMenuOpen(false)}
+      />
 
       <ConfirmModal
         visible={confirmSettle}

@@ -39,6 +39,9 @@ export default function RootLayout() {
                     <Stack.Screen name="budgets" options={{ presentation: 'modal', title: 'Monthly budgets' }} />
                     <Stack.Screen name="profile" options={{ title: 'Profile' }} />
                     <Stack.Screen name="security" options={{ presentation: 'modal', title: 'App Lock' }} />
+                    <Stack.Screen name="shared-new" options={{ presentation: 'modal', title: 'Shared book' }} />
+                    <Stack.Screen name="shared-book" options={{ title: 'Shared book' }} />
+                    <Stack.Screen name="shared-entry" options={{ presentation: 'modal', title: 'Add entry' }} />
                   </Stack>
                 </LockGate>
               </AuthGate>
