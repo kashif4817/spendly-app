@@ -1240,9 +1240,20 @@ export const BOOK_FLAG_PREFIX = '#book:';
 
 export const bookFlagKey = (bookId: string): string => `${BOOK_FLAG_PREFIX}${bookId}`;
 
-/** The stable row id for a person's flags. Derived, never random. */
-function personFlagId(person: string): string {
-  return `PF-${person.trim()}`;
+/**
+ * The stable row id for a person's flags. Derived rather than random so two
+ * devices on the same account agree on the row instead of each making their own.
+ *
+ * The account id is part of it, and has to be. `person_flags.id` is the primary
+ * key of a table every account shares, so keying it on the name alone meant
+ * "Ali" was the SAME row for everybody: the first account to save flags for an
+ * Ali owned that id, and every other account's upsert hit their row and was
+ * refused by row-level security (42501). Names collide constantly — that made
+ * flags unsyncable for anyone with a common name in their list, and because a
+ * rejected row used to stall the whole outbox, it stopped all syncing.
+ */
+function personFlagId(person: string, userId: string): string {
+  return `PF-${userId}-${person.trim()}`;
 }
 
 /** Write one or both flags for a person, creating the row on first use. */
@@ -1250,7 +1261,7 @@ function setPersonFlags(person: string, patch: Partial<PersonFlags>): void {
   const name = person.trim();
   if (!name) return;
 
-  const id = personFlagId(name);
+  const id = personFlagId(name, currentUserId ?? '');
   const updatedAt = nowIso();
   const current = getPersonFlags(name);
   const pinned = (patch.pinned ?? current.pinned) ? 1 : 0;
@@ -1277,6 +1288,42 @@ function setPersonFlags(person: string, patch: Partial<PersonFlags>): void {
     id, currentUserId ?? '', name, pinned, archived, updatedAt
   );
   enqueue('person_flags', id, 'upsert', updatedAt);
+}
+
+/**
+ * Move any flags row still using the old, account-less id onto the new scheme.
+ *
+ * Runs on sign-in rather than in migrate(), because the id now depends on the
+ * account and migrations run at import time, before anyone has signed in. The
+ * old id is queued for deletion as well — scoped to this account, so if the row
+ * on the server actually belongs to somebody else the delete simply matches
+ * nothing instead of touching their data.
+ */
+export function migratePersonFlagIds(userId: string): void {
+  if (!userId) return;
+
+  const rows = db.getAllSync<{ id: string; person: string }>(
+    'SELECT id, person FROM person_flags'
+  );
+  const stamp = nowIso();
+  let moved = 0;
+
+  db.withTransactionSync(() => {
+    for (const row of rows) {
+      const wanted = personFlagId(row.person, userId);
+      if (row.id === wanted) continue;
+
+      db.runSync(
+        'UPDATE person_flags SET id = ?, user_id = ?, updated_at = ? WHERE id = ?',
+        wanted, userId, stamp, row.id
+      );
+      enqueue('person_flags', row.id, 'delete', stamp);
+      enqueue('person_flags', wanted, 'upsert', stamp);
+      moved++;
+    }
+  });
+
+  if (moved > 0) notifyDbChanged();
 }
 
 /** Keep a person at the top of the people list (or stop doing so). */
@@ -1925,6 +1972,21 @@ export function applyRemoteRows(table: AnyTable, rows: RemoteRow[]): void {
     }
   });
   notifyDbChanged();
+}
+
+/**
+ * Row ids of a table still waiting to go up.
+ *
+ * Screens use this to mark an entry as pending rather than synced. It reads the
+ * outbox, which lives in the same database, so the `useQuery` hook re-runs and
+ * the mark clears by itself the moment the push succeeds.
+ */
+export function getPendingRowIds(table: AnyTable): string[] {
+  const rows = db.getAllSync<{ row_id: string }>(
+    'SELECT row_id FROM sync_outbox WHERE table_name = ?',
+    table
+  );
+  return rows.map((r) => r.row_id);
 }
 
 /** The rows currently queued for upload, oldest first. */

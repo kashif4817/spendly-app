@@ -10,7 +10,6 @@ import {
   View,
 } from 'react-native';
 
-import { ConfirmModal } from '@/components/confirm-modal';
 import { Segmented } from '@/components/segmented';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -28,9 +27,8 @@ import {
 import { useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
 import { addDays, formatRelativeDay, todayKey } from '@/lib/date';
+import { confirm } from '@/lib/confirm';
 import { parseAmount } from '@/lib/money';
-
-const ACCENT = '#0B7C4F';
 
 /**
  * Add or edit one entry in a shared book.
@@ -56,7 +54,6 @@ export default function SharedEntryScreen() {
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [day, setDay] = useState(todayKey());
-  const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Fill the form once the entry being edited has loaded.
   useEffect(() => {
@@ -84,11 +81,17 @@ export default function SharedEntryScreen() {
     router.back();
   };
 
-  const remove = () => {
-    setConfirmDelete(false);
-    if (existing) deleteSharedEntry(existing.id);
-    router.back();
-  };
+  const remove = () =>
+    confirm({
+      title: 'Delete this entry?',
+      message: 'It will disappear for both of you.',
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: () => {
+        if (existing) deleteSharedEntry(existing.id);
+        router.back();
+      },
+    });
 
   const youPaid = payerId === me;
 
@@ -188,7 +191,7 @@ export default function SharedEntryScreen() {
             disabled={!canSave}
             style={({ pressed }) => [
               styles.submit,
-              { backgroundColor: ACCENT },
+              { backgroundColor: theme.accent },
               !canSave && styles.disabled,
               pressed && styles.pressed,
             ]}
@@ -198,7 +201,7 @@ export default function SharedEntryScreen() {
 
           {isEdit && canEdit && (
             <Pressable
-              onPress={() => setConfirmDelete(true)}
+              onPress={remove}
               style={styles.deleteBtn}
               accessibilityRole="button">
               <ThemedText type="smallBold" style={{ color: MoneyColors.out }}>
@@ -208,16 +211,6 @@ export default function SharedEntryScreen() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
-
-      <ConfirmModal
-        visible={confirmDelete}
-        title="Delete this entry?"
-        message="It will disappear for both of you."
-        confirmLabel="Delete"
-        destructive
-        onCancel={() => setConfirmDelete(false)}
-        onConfirm={remove}
-      />
     </ThemedView>
   );
 }

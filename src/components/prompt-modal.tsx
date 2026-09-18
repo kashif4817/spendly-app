@@ -15,8 +15,6 @@ import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 const DANGER = '#e5484d';
-const ACCENT = '#0B7C4F';
-
 type Props = {
   visible: boolean;
   title: string;
@@ -155,7 +153,7 @@ export function PromptModal({
                   onPress={submit}
                   style={({ pressed }) => [
                     styles.btn,
-                    { backgroundColor: ACCENT },
+                    { backgroundColor: theme.accent },
                     pressed && styles.pressed,
                   ]}
                   accessibilityRole="button">

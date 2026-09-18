@@ -20,7 +20,6 @@ import { getCurrentUserId } from '@/db';
 import { useTheme } from '@/hooks/use-theme';
 import { createSharedBook, joinSharedBook, SharedBookError } from '@/sync/shared';
 
-const ACCENT = '#0B7C4F';
 const DANGER = '#e5484d';
 
 type Mode = 'create' | 'join';
@@ -156,7 +155,7 @@ export default function SharedNewScreen() {
             disabled={!canSubmit}
             style={({ pressed }) => [
               styles.submit,
-              { backgroundColor: ACCENT },
+              { backgroundColor: theme.accent },
               !canSubmit && styles.disabled,
               pressed && styles.pressed,
             ]}

@@ -20,8 +20,6 @@ import { useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
 import { parseAmount } from '@/lib/money';
 
-const ACCENT = '#208AEF';
-
 export default function BudgetsScreen() {
   const theme = useTheme();
   const router = useRouter();
@@ -96,7 +94,11 @@ export default function BudgetsScreen() {
 
           <Pressable
             onPress={onSave}
-            style={({ pressed }) => [styles.saveButton, pressed && { opacity: 0.85 }]}>
+            style={({ pressed }) => [
+              styles.saveButton,
+              { backgroundColor: theme.accent },
+              pressed && { opacity: 0.85 },
+            ]}>
             <ThemedText style={styles.saveText}>Save budgets</ThemedText>
           </Pressable>
 
@@ -142,7 +144,6 @@ const styles = StyleSheet.create({
     borderRadius: Spacing.three,
     paddingVertical: Spacing.three,
     alignItems: 'center',
-    backgroundColor: ACCENT,
   },
   saveText: {
     color: '#ffffff',

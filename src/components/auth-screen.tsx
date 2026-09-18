@@ -13,8 +13,6 @@ import { useSync } from '@/sync/provider';
 
 const LOGO = require('../../assets/images/spendly-logo.png');
 const MAX_WIDTH = 420;
-const ACCENT = '#0B7C4F';
-
 /** The signed-out screen: brand + a single "Continue with Google" button. */
 export function AuthScreen() {
   const insets = useSafeAreaInsets();
@@ -106,9 +104,10 @@ export function AuthScreen() {
 }
 
 function Feature({ text }: { text: string }) {
+  const theme = useTheme();
   return (
     <View style={styles.feature}>
-      <View style={[styles.dot, { backgroundColor: ACCENT }]} />
+      <View style={[styles.dot, { backgroundColor: theme.accent }]} />
       <ThemedText type="small" themeColor="textSecondary" style={styles.featureText}>
         {text}
       </ThemedText>

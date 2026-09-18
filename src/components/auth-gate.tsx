@@ -1,13 +1,12 @@
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { AuthScreen } from '@/components/auth-screen';
+import { useTheme } from '@/hooks/use-theme';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { getDbInitError } from '@/db';
 import { useSync } from '@/sync/provider';
-
-const ACCENT = '#0B7C4F';
 
 /**
  * Gates the whole app behind a one-time login. Once signed in, the session is
@@ -15,6 +14,7 @@ const ACCENT = '#0B7C4F';
  * actual login/sign-up UI lives in <AuthScreen>.
  */
 export function AuthGate({ children }: { children: React.ReactNode }) {
+  const theme = useTheme();
   const { ready, email } = useSync();
 
   // A fatal DB error — show it instead of a blank/stuck screen so it's reportable.
@@ -41,7 +41,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   if (!ready) {
     return (
       <ThemedView style={styles.center}>
-        <ActivityIndicator size="large" color={ACCENT} />
+        <ActivityIndicator size="large" color={theme.accent} />
       </ThemedView>
     );
   }

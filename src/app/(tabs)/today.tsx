@@ -4,6 +4,7 @@ import { FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AddButton } from '@/components/add-button';
+import { useTheme } from '@/hooks/use-theme';
 import { BalanceCard } from '@/components/balance-card';
 import { BudgetBar } from '@/components/budget-bar';
 import { DayExpenses } from '@/components/day-expenses';
@@ -43,6 +44,7 @@ const TABS: SegmentOption<Tab>[] = [
 ];
 
 export default function ExpensesScreen() {
+  const theme = useTheme();
   const [tab, setTab] = useState<Tab>('today');
 
   // The month on screen, and the day whose entries the calendar tab shows
@@ -80,7 +82,7 @@ export default function ExpensesScreen() {
             </ThemedText>
             {tab === 'calendar' && !isToday && (
               <Pressable onPress={jumpToToday} hitSlop={8}>
-                <ThemedText type="smallBold" style={styles.jump}>
+                <ThemedText type="smallBold" style={[styles.jump, { color: theme.accent }]}>
                   Today
                 </ThemedText>
               </Pressable>
@@ -261,7 +263,6 @@ const styles = StyleSheet.create({
     lineHeight: 46,
   },
   jump: {
-    color: '#0B7C4F',
     paddingBottom: Spacing.two,
   },
   content: {

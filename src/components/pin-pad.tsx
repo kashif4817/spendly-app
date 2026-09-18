@@ -6,7 +6,6 @@ import { PIN_LENGTH } from '@/lock/app-lock';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
-const ACCENT = '#0B7C4F';
 const DANGER = '#e5484d';
 
 type Props = {
@@ -45,7 +44,7 @@ export function PinPad({ value, onChange, onComplete, length = PIN_LENGTH, error
               style={[
                 styles.dot,
                 { borderColor: error ? DANGER : theme.textSecondary },
-                filled && { backgroundColor: error ? DANGER : ACCENT, borderColor: error ? DANGER : ACCENT },
+                filled && { backgroundColor: error ? DANGER : theme.accent, borderColor: error ? DANGER : theme.accent },
               ]}
             />
           );
@@ -70,7 +69,7 @@ export function PinPad({ value, onChange, onComplete, length = PIN_LENGTH, error
             style={({ pressed }) => [styles.key, pressed && { backgroundColor: theme.backgroundElement }]}
             accessibilityRole="button"
             accessibilityLabel="Unlock with biometrics">
-            <MaterialIcons name="fingerprint" size={30} color={ACCENT} />
+            <MaterialIcons name="fingerprint" size={30} color={theme.accent} />
           </Pressable>
         ) : (
           <View style={styles.key} />

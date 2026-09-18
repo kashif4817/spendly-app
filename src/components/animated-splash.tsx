@@ -3,6 +3,13 @@ import { Animated, Easing, StyleSheet, useColorScheme } from 'react-native';
 
 // Must match the expo-splash-screen colors in app.json so the native splash
 // hands off to this overlay without a visible seam.
+//
+// This is the one place that reads the SYSTEM scheme directly instead of the
+// app's Appearance setting: the native splash is drawn by the OS before any of
+// our code runs, so it follows the phone. Matching the user's override here
+// would put a light overlay on top of a dark native splash, or the reverse.
+// Nor does it take the accent — the native splash colour is baked into the
+// build, so it can't change with a setting.
 const EMERALD = '#0B7C4F';
 const EMERALD_DARK = '#081C13';
 

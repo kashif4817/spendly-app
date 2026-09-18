@@ -5,6 +5,7 @@ import { ActivityIndicator, AppState, Pressable, StyleSheet, View } from 'react-
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
+import { useTheme } from '@/hooks/use-theme';
 import { Spacing } from '@/constants/theme';
 
 /**
@@ -15,6 +16,7 @@ import { Spacing } from '@/constants/theme';
  * downloaded update applies on the next cold start anyway.
  */
 export function UpdatePrompt() {
+  const theme = useTheme();
   const { isDownloading, isUpdatePending } = Updates.useUpdates();
   const [dismissed, setDismissed] = useState(false);
   const checking = useRef(false);
@@ -50,7 +52,8 @@ export function UpdatePrompt() {
   if (dismissed || (!isDownloading && !isUpdatePending)) return null;
 
   return (
-    <View style={[styles.banner, { top: insets.top + Spacing.two }]}>
+    <View
+      style={[styles.banner, { backgroundColor: theme.accent, top: insets.top + Spacing.two }]}>
       <View style={styles.left}>
         <MaterialIcons name="system-update" size={20} color="#ffffff" />
         <View style={styles.copy}>
@@ -71,7 +74,9 @@ export function UpdatePrompt() {
               style={({ pressed }) => [styles.restart, pressed && styles.pressed]}
               accessibilityRole="button"
               accessibilityLabel="Restart to apply update">
-              <ThemedText style={styles.restartLabel}>Restart</ThemedText>
+              <ThemedText style={[styles.restartLabel, { color: theme.accent }]}>
+                Restart
+              </ThemedText>
             </Pressable>
             <Pressable
               onPress={() => setDismissed(true)}
@@ -101,7 +106,6 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.two,
     paddingHorizontal: Spacing.three,
     borderRadius: 14,
-    backgroundColor: '#208AEF',
     shadowColor: '#000',
     shadowOpacity: 0.25,
     shadowRadius: 8,
@@ -143,7 +147,6 @@ const styles = StyleSheet.create({
     opacity: 0.85,
   },
   restartLabel: {
-    color: '#208AEF',
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '700',

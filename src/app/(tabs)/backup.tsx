@@ -7,20 +7,27 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { ConfirmModal } from '@/components/confirm-modal';
 import { Segmented } from '@/components/segmented';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import {
+  Accents,
+  ACCENT_KEYS,
+  BottomTabInset,
+  MaxContentWidth,
+  Spacing,
+} from '@/constants/theme';
+import { useAccentKey, useAppearanceMode } from '@/hooks/use-appearance';
 import { useTheme } from '@/hooks/use-theme';
 import { useWeekStart } from '@/hooks/use-week-start';
 import { exportCsv, exportPdf } from '@/lib/export';
+import { confirm } from '@/lib/confirm';
 import { applyReminder, formatTime, getReminderPrefs } from '@/lib/notifications';
+import { MODE_OPTIONS, setAccentKey, setAppearanceMode } from '@/lib/appearance';
 import { setWeekStart } from '@/lib/week-start';
 import { useLock } from '@/lock/provider';
 import { useSync } from '@/sync/provider';
 
-const ACCENT = '#0B7C4F';
 const DANGER = '#e5484d';
 const LOGO = require('../../../assets/images/spendly-logo.png');
 
@@ -51,11 +58,12 @@ const TIME_PRESETS = [
 export default function SettingsScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { name, email, status, lastSyncedAt, syncNow, logOut } = useSync();
+  const { name, email, status, lastSyncedAt, failure, syncNow, logOut } = useSync();
   const { enabled: lockEnabled } = useLock();
   const weekStartsOn = useWeekStart();
+  const mode = useAppearanceMode();
+  const accentKey = useAccentKey();
 
-  const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [reminder, setReminder] = useState({ enabled: false, hour: 21, minute: 0 });
   const [exporting, setExporting] = useState<null | 'csv' | 'pdf'>(null);
 
@@ -128,7 +136,13 @@ export default function SettingsScreen() {
               </ThemedText>
             )}
             <View style={styles.statusRow}>
-              <View style={[styles.dot, status === 'offline' && styles.dotOffline]} />
+              <View
+                style={[
+                  styles.dot,
+                  { backgroundColor: theme.accent },
+                  status === 'offline' && styles.dotOffline,
+                ]}
+              />
               <ThemedText type="small">{statusLabel}</ThemedText>
               {lastSyncedAt && (
                 <ThemedText type="small" themeColor="textSecondary">
@@ -139,11 +153,20 @@ export default function SettingsScreen() {
             <View style={styles.rowBtns}>
               <Pressable
                 onPress={syncNow}
-                style={({ pressed }) => [styles.smallBtn, { backgroundColor: ACCENT }, pressed && styles.pressed]}>
+                style={({ pressed }) => [styles.smallBtn, { backgroundColor: theme.accent }, pressed && styles.pressed]}>
                 <ThemedText style={styles.smallBtnLabel}>Sync now</ThemedText>
               </Pressable>
               <Pressable
-                onPress={() => setConfirmSignOut(true)}
+                onPress={() =>
+              confirm({
+                title: 'Sign out?',
+                message:
+                  'Your data stays safely backed up in the cloud. Sign back in anytime on this or any device to get it all back.',
+                confirmLabel: 'Sign out',
+                destructive: true,
+                onConfirm: logOut,
+              })
+            }
                 style={({ pressed }) => [styles.smallBtn, styles.ghostBtn, pressed && styles.pressed]}>
                 <ThemedText type="smallBold" style={{ color: DANGER }}>
                   Sign out
@@ -166,12 +189,88 @@ export default function SettingsScreen() {
               </ThemedText>
             </View>
             <View style={styles.linkRight}>
-              <ThemedText type="small" style={{ color: lockEnabled ? ACCENT : theme.textSecondary }}>
+              <ThemedText type="small" style={{ color: lockEnabled ? theme.accent : theme.textSecondary }}>
                 {lockEnabled ? 'On' : 'Off'}
               </ThemedText>
               <MaterialIcons name="chevron-right" size={22} color={theme.textSecondary} />
             </View>
           </Pressable>
+
+          {/* A row the server refused. Silence here is what turns a single bad
+              row into "the app is just offline", so say it out loud. */}
+          {failure && (
+            <View style={[styles.card, card, styles.failureCard]}>
+              <View style={styles.linkRow}>
+                <MaterialIcons name="sync-problem" size={22} color={DANGER} />
+                <View style={styles.linkText}>
+                  <ThemedText type="smallBold" style={{ color: DANGER }}>
+                    A change couldn’t be saved to the cloud
+                  </ThemedText>
+                  <ThemedText type="small" themeColor="textSecondary">
+                    {failure.table} · {failure.op}
+                    {failure.code ? ` · ${failure.code}` : ''}
+                  </ThemedText>
+                  <ThemedText type="small" themeColor="textSecondary">
+                    {failure.message}
+                  </ThemedText>
+                </View>
+              </View>
+            </View>
+          )}
+
+          {/* Appearance */}
+          <ThemedText type="smallBold" themeColor="textSecondary" style={styles.section}>
+            APPEARANCE
+          </ThemedText>
+          <View style={[styles.card, card]}>
+            <View style={styles.linkText}>
+              <ThemedText type="smallBold">Theme</ThemedText>
+              <ThemedText type="small" themeColor="textSecondary">
+                System follows your phone’s light or dark setting
+              </ThemedText>
+            </View>
+            <Segmented options={MODE_OPTIONS} value={mode} onChange={setAppearanceMode} />
+
+            <View style={styles.accentBlock}>
+              <View style={styles.linkText}>
+                <ThemedText type="smallBold">Accent colour</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary">
+                  Used for buttons, tabs and highlights
+                </ThemedText>
+              </View>
+              <View style={styles.swatches}>
+                {ACCENT_KEYS.map((key) => {
+                  const selected = key === accentKey;
+                  return (
+                    <Pressable
+                      key={key}
+                      onPress={() => setAccentKey(key)}
+                      style={styles.swatchHit}
+                      accessibilityRole="button"
+                      accessibilityLabel={Accents[key].label}
+                      accessibilityState={{ selected }}>
+                      <View
+                        style={[
+                          styles.swatch,
+                          { backgroundColor: Accents[key].color },
+                          // The ring is drawn in the page background so it reads
+                          // as a gap, whichever theme is on.
+                          selected && { borderColor: theme.background },
+                        ]}>
+                        {selected && <MaterialIcons name="check" size={18} color="#ffffff" />}
+                      </View>
+                      <ThemedText
+                        type="small"
+                        themeColor={selected ? 'text' : 'textSecondary'}
+                        style={styles.swatchLabel}>
+                        {Accents[key].label}
+                      </ThemedText>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          </View>
 
           {/* Preferences */}
           <ThemedText type="smallBold" themeColor="textSecondary" style={styles.section}>
@@ -206,7 +305,7 @@ export default function SettingsScreen() {
                   A nudge to log today’s spending
                 </ThemedText>
               </View>
-              <Switch value={reminder.enabled} onValueChange={toggleReminder} trackColor={{ true: ACCENT }} />
+              <Switch value={reminder.enabled} onValueChange={toggleReminder} trackColor={{ true: theme.accent }} />
             </View>
 
             {reminder.enabled && (
@@ -219,7 +318,7 @@ export default function SettingsScreen() {
                       onPress={() => pickTime(t.h, t.m)}
                       style={[
                         styles.timeChip,
-                        { backgroundColor: active ? ACCENT : theme.backgroundSelected },
+                        { backgroundColor: active ? theme.accent : theme.backgroundSelected },
                       ]}>
                       <ThemedText type="small" style={{ color: active ? '#ffffff' : theme.text }}>
                         {formatTime(t.h, t.m)}
@@ -271,19 +370,6 @@ export default function SettingsScreen() {
           </View>
         </ScrollView>
       </SafeAreaView>
-
-      <ConfirmModal
-        visible={confirmSignOut}
-        title="Sign out?"
-        message="Your data stays safely backed up in the cloud. Sign back in anytime on this or any device to get it all back."
-        confirmLabel="Sign out"
-        destructive
-        onCancel={() => setConfirmSignOut(false)}
-        onConfirm={() => {
-          setConfirmSignOut(false);
-          logOut();
-        }}
-      />
     </ThemedView>
   );
 }
@@ -305,12 +391,13 @@ function ExportRow({
   color: string;
   secondary: string;
 }) {
+  const theme = useTheme();
   return (
     <Pressable
       onPress={onPress}
       disabled={busy}
       style={({ pressed }) => [styles.exportRow, pressed && styles.pressed]}>
-      <MaterialIcons name={icon} size={24} color={ACCENT} />
+      <MaterialIcons name={icon} size={24} color={theme.accent} />
       <View style={styles.linkText}>
         <ThemedText type="smallBold" style={{ color }}>
           {label}
@@ -320,7 +407,7 @@ function ExportRow({
         </ThemedText>
       </View>
       {busy ? (
-        <ActivityIndicator color={ACCENT} />
+        <ActivityIndicator color={theme.accent} />
       ) : (
         <MaterialIcons name="ios-share" size={20} color={secondary} />
       )}
@@ -366,6 +453,35 @@ const styles = StyleSheet.create({
     lineHeight: 46,
     marginBottom: Spacing.two,
   },
+  failureCard: {
+    gap: Spacing.two,
+  },
+  accentBlock: {
+    gap: Spacing.two,
+    marginTop: Spacing.one,
+  },
+  swatches: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  swatchHit: {
+    alignItems: 'center',
+    gap: Spacing.one,
+    flex: 1,
+  },
+  swatch: {
+    width: 40,
+    height: 40,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 3,
+    borderColor: 'transparent',
+  },
+  swatchLabel: {
+    fontSize: 11,
+  },
   section: {
     marginTop: Spacing.four,
     marginBottom: Spacing.two,
@@ -390,7 +506,6 @@ const styles = StyleSheet.create({
     width: 9,
     height: 9,
     borderRadius: 999,
-    backgroundColor: ACCENT,
   },
   dotOffline: {
     backgroundColor: '#e5a23d',

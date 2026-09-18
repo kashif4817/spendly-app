@@ -3,8 +3,8 @@ import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Switch, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { ConfirmModal } from '@/components/confirm-modal';
 import { PinPad } from '@/components/pin-pad';
+import { confirm } from '@/lib/confirm';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
@@ -18,7 +18,6 @@ import {
 } from '@/lock/app-lock';
 import { useLock } from '@/lock/provider';
 
-const ACCENT = '#0B7C4F';
 const DANGER = '#e5484d';
 
 type Step = 'idle' | 'create' | 'confirm';
@@ -33,7 +32,6 @@ export default function SecurityScreen() {
   const [firstPin, setFirstPin] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [bioAvailable, setBioAvailable] = useState(false);
-  const [confirmOff, setConfirmOff] = useState(false);
 
   useEffect(() => {
     biometricAvailable().then(setBioAvailable);
@@ -73,7 +71,6 @@ export default function SecurityScreen() {
   };
 
   const turnOff = async () => {
-    setConfirmOff(false);
     await disableLock();
     await refresh();
     setStep('idle');
@@ -101,7 +98,7 @@ export default function SecurityScreen() {
           )}
 
           <Pressable onPress={() => setStep('idle')} style={styles.cancel} hitSlop={8}>
-            <ThemedText type="smallBold" style={{ color: ACCENT }}>
+            <ThemedText type="smallBold" style={{ color: theme.accent }}>
               Cancel
             </ThemedText>
           </Pressable>
@@ -122,7 +119,7 @@ export default function SecurityScreen() {
           <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
             <View style={styles.row}>
               <ThemedText type="smallBold">App Lock</ThemedText>
-              <ThemedText type="small" style={{ color: enabled ? ACCENT : theme.textSecondary }}>
+              <ThemedText type="small" style={{ color: enabled ? theme.accent : theme.textSecondary }}>
                 {enabled ? 'On' : 'Off'}
               </ThemedText>
             </View>
@@ -133,7 +130,7 @@ export default function SecurityScreen() {
                 <Switch
                   value={biometric}
                   onValueChange={toggleBiometric}
-                  trackColor={{ true: ACCENT }}
+                  trackColor={{ true: theme.accent }}
                 />
               </View>
             )}
@@ -142,17 +139,34 @@ export default function SecurityScreen() {
           {!enabled ? (
             <Pressable
               onPress={startCreate}
-              style={({ pressed }) => [styles.primaryBtn, pressed && styles.pressed]}>
+              style={({ pressed }) => [
+                styles.primaryBtn,
+                { backgroundColor: theme.accent },
+                pressed && styles.pressed,
+              ]}>
               <ThemedText style={styles.primaryLabel}>Turn on App Lock</ThemedText>
             </Pressable>
           ) : (
             <>
               <Pressable
                 onPress={startCreate}
-                style={({ pressed }) => [styles.primaryBtn, pressed && styles.pressed]}>
+                style={({ pressed }) => [
+                  styles.primaryBtn,
+                  { backgroundColor: theme.accent },
+                  pressed && styles.pressed,
+                ]}>
                 <ThemedText style={styles.primaryLabel}>Change PIN</ThemedText>
               </Pressable>
-              <Pressable onPress={() => setConfirmOff(true)} style={styles.textBtn} hitSlop={8}>
+              <Pressable onPress={() =>
+                confirm({
+                  title: 'Turn off App Lock?',
+                  message:
+                    'Anyone who opens the app will be able to see your money. You can turn it back on anytime.',
+                  confirmLabel: 'Turn off',
+                  destructive: true,
+                  onConfirm: turnOff,
+                })
+              } style={styles.textBtn} hitSlop={8}>
                 <ThemedText type="smallBold" style={{ color: DANGER }}>
                   Turn off App Lock
                 </ThemedText>
@@ -167,16 +181,6 @@ export default function SecurityScreen() {
           </Pressable>
         </View>
       </SafeAreaView>
-
-      <ConfirmModal
-        visible={confirmOff}
-        title="Turn off App Lock?"
-        message="Anyone who opens the app will be able to see your money. You can turn it back on anytime."
-        confirmLabel="Turn off"
-        destructive
-        onCancel={() => setConfirmOff(false)}
-        onConfirm={turnOff}
-      />
     </ThemedView>
   );
 }
@@ -219,7 +223,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   primaryBtn: {
-    backgroundColor: ACCENT,
     borderRadius: 12,
     paddingVertical: Spacing.three,
     alignItems: 'center',

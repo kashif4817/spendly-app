@@ -4,9 +4,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Spacing } from '@/constants/theme';
+import { Accents, Spacing } from '@/constants/theme';
+import { getAccentKey } from '@/lib/appearance';
 
-const ACCENT = '#0B7C4F';
 const DANGER = '#e5484d';
 
 type Props = { children: React.ReactNode };
@@ -60,7 +60,9 @@ export class ErrorBoundary extends React.Component<Props, State> {
               </ThemedText>
             )}
 
-            <Pressable onPress={this.reset} style={styles.button}>
+            <Pressable
+              onPress={this.reset}
+              style={[styles.button, { backgroundColor: Accents[getAccentKey()].color }]}>
               <ThemedText style={styles.buttonText}>Try again</ThemedText>
             </Pressable>
           </ScrollView>
@@ -92,7 +94,6 @@ const styles = StyleSheet.create({
   },
   button: {
     marginTop: Spacing.three,
-    backgroundColor: ACCENT,
     borderRadius: 12,
     paddingVertical: Spacing.three,
     alignItems: 'center',

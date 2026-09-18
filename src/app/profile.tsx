@@ -5,6 +5,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, View } from 'react-nat
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ActionSheet } from '@/components/action-sheet';
+import { useTheme } from '@/hooks/use-theme';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
@@ -13,9 +14,8 @@ import { removeAvatar, uploadAvatar } from '@/lib/profile';
 import { captureWithCamera, compressReceipt, pickFromLibrary } from '@/lib/receipts';
 import { useSync } from '@/sync/provider';
 
-const ACCENT = '#0B7C4F';
-
 export default function ProfileScreen() {
+  const theme = useTheme();
   const { name, email, avatarUrl, reloadAvatar } = useSync();
   const [busy, setBusy] = useState(false);
   const [chooserOpen, setChooserOpen] = useState(false);
@@ -63,11 +63,11 @@ export default function ProfileScreen() {
             {avatarUrl ? (
               <Image source={{ uri: avatarUrl }} style={styles.avatar} contentFit="cover" />
             ) : (
-              <View style={[styles.avatar, styles.placeholder]}>
+              <View style={[styles.avatar, styles.placeholder, { backgroundColor: theme.accent }]}>
                 <ThemedText style={styles.initial}>{initial}</ThemedText>
               </View>
             )}
-            <View style={styles.editBadge}>
+            <View style={[styles.editBadge, { backgroundColor: theme.accent }]}>
               <MaterialIcons name="photo-camera" size={16} color="#ffffff" />
             </View>
             {busy && (
@@ -85,7 +85,7 @@ export default function ProfileScreen() {
           </ThemedText>
 
           <Pressable onPress={openChooser} style={styles.changeBtn} hitSlop={8} disabled={busy}>
-            <ThemedText type="smallBold" style={{ color: ACCENT }}>
+            <ThemedText type="smallBold" style={{ color: theme.accent }}>
               {avatarUrl ? 'Change photo' : 'Add a photo'}
             </ThemedText>
           </Pressable>
@@ -141,7 +141,6 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   placeholder: {
-    backgroundColor: ACCENT,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -157,7 +156,6 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 999,
-    backgroundColor: ACCENT,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 3,

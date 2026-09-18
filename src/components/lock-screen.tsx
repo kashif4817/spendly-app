@@ -3,17 +3,18 @@ import { ActivityIndicator, Animated, Pressable, StyleSheet, View } from 'react-
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GoogleGlyph } from '@/components/google-glyph';
+import { useTheme } from '@/hooks/use-theme';
 import { PinPad } from '@/components/pin-pad';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useLock } from '@/lock/provider';
 
-const ACCENT = '#0B7C4F';
 const DANGER = '#e5484d';
 
 /** Full-screen unlock gate: biometric + PIN, with a "forgot PIN" Google fallback. */
 export function LockScreen() {
+  const theme = useTheme();
   const { biometric, unlockWithPin, tryBiometric, forgotUnlock } = useLock();
 
   const [mode, setMode] = useState<'pin' | 'forgot'>('pin');
@@ -59,7 +60,7 @@ export function LockScreen() {
         {mode === 'pin' ? (
           <>
             <View style={styles.top}>
-              <View style={styles.badge}>
+              <View style={[styles.badge, { backgroundColor: theme.accent }]}>
                 <ThemedText style={styles.badgeText}>Rs</ThemedText>
               </View>
               <ThemedText type="subtitle" style={styles.title}>
@@ -89,7 +90,7 @@ export function LockScreen() {
             </Animated.View>
 
             <Pressable onPress={() => setMode('forgot')} hitSlop={8} style={styles.link}>
-              <ThemedText type="smallBold" style={{ color: ACCENT }}>
+              <ThemedText type="smallBold" style={{ color: theme.accent }}>
                 Forgot PIN?
               </ThemedText>
             </Pressable>
@@ -156,7 +157,6 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 20,
-    backgroundColor: ACCENT,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: Spacing.two,

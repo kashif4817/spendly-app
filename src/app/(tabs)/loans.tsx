@@ -6,7 +6,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { AddButton } from '@/components/add-button';
-import { ConfirmModal } from '@/components/confirm-modal';
 import { PromptModal } from '@/components/prompt-modal';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -30,12 +29,11 @@ import { useQuery } from '@/db/hooks';
 import { usePeopleView } from '@/hooks/use-people-view';
 import { useTheme } from '@/hooks/use-theme';
 import { formatRelativeDay } from '@/lib/date';
-import { formatCompact, formatMoney } from '@/lib/money';
+import { confirm, notify } from '@/lib/confirm';
+import { formatMoney } from '@/lib/money';
 import { setPeopleView, type PeopleView } from '@/lib/people-view';
 import { useSync } from '@/sync/provider';
 import { leaveSharedBook, renameSharedBook, SharedBookError } from '@/sync/shared';
-
-const ACCENT = '#0B7C4F';
 
 /** Balances this small are rounding noise, not money owed. */
 const SETTLED_EPSILON = 0.005;
@@ -54,7 +52,6 @@ const FILTERS: { key: Filter; label: string }[] = [
 const VIEWS: { key: PeopleView; icon: React.ComponentProps<typeof MaterialIcons>['name']; label: string }[] = [
   { key: 'list', icon: 'view-agenda', label: 'List view' },
   { key: 'grid', icon: 'grid-view', label: 'Grid view' },
-  { key: 'table', icon: 'table-rows', label: 'Table view' },
 ];
 
 /** Fills the empty half of a grid row with an odd number of people. */
@@ -161,11 +158,9 @@ export default function PeopleScreen() {
   // The person being renamed, or deleted, and how far the delete has got:
   // stage 2 is the second warning, which only people with history ever see.
   const [renameFor, setRenameFor] = useState<Row | null>(null);
-  const [deleteFor, setDeleteFor] = useState<Row | null>(null);
-  const [deleteStage, setDeleteStage] = useState<1 | 2>(1);
   // Renaming or leaving a shared book talks to the server, so unlike the purely
   // local person actions it has something to report when it fails.
-  const [notice, setNotice] = useState<string | null>(null);
+  const setNotice = (message: string) => notify(message);
 
   const query = search.trim().toLowerCase();
 
@@ -271,37 +266,59 @@ export default function PeopleScreen() {
     setRenameFor(null);
   };
 
-  const askDelete = (person: Row) => {
-    setDeleteStage(1);
-    setDeleteFor(person);
-  };
 
-  const confirmDelete = () => {
-    if (!deleteFor) return;
-
-    if (deleteFor.bookId) {
-      // Leaving is the book's version of delete: your copy goes, the other
-      // member keeps theirs. One confirmation is enough — nothing is destroyed.
-      const bookId = deleteFor.bookId;
-      setDeleteFor(null);
-      leaveSharedBook(bookId, me).catch((error) =>
-        setNotice(
-          error instanceof SharedBookError
-            ? error.message
-            : 'Couldn’t leave the book. It needs a connection.'
-        )
-      );
+  /**
+   * Leaving a book is one question. Deleting a person is one question too,
+   * unless they carry entries or an open balance — then it asks again, because
+   * that is the only case where saying yes actually destroys something.
+   */
+  const askDelete = (row: Row) => {
+    if (row.bookId) {
+      const bookId = row.bookId;
+      confirm({
+        title: `Leave ${row.person}?`,
+        message:
+          'You\u2019ll stop seeing this book and its entries on all your devices. The other person keeps the book and its full history.',
+        confirmLabel: 'Leave',
+        destructive: true,
+        onConfirm: () =>
+          leaveSharedBook(bookId, me).catch((error) =>
+            setNotice(
+              error instanceof SharedBookError
+                ? error.message
+                : 'Couldn\u2019t leave the book. It needs a connection.'
+            )
+          ),
+      });
       return;
     }
 
-    // Anyone with entries or an open balance is asked a second time; everyone
-    // else goes on the first Delete, since there is nothing to lose.
-    if (deleteStage === 1 && needsSecondWarning(deleteFor)) {
-      setDeleteStage(2);
+    if (!needsSecondWarning(row)) {
+      confirm({
+        title: `Delete ${row.person}?`,
+        message: 'They have no entries yet, so nothing else is lost.',
+        confirmLabel: 'Delete',
+        destructive: true,
+        onConfirm: () => deletePerson(row.person),
+      });
       return;
     }
-    deletePerson(deleteFor.person);
-    setDeleteFor(null);
+
+    confirm({
+      title: `Delete ${row.person}?`,
+      message: `This removes ${deleteCost(row)}. Archive them instead to clear the list and keep the history.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: () =>
+        confirm({
+          title: `Delete ${row.person} for good?`,
+          message: `Last check: ${deleteCost(row)} will be gone from every device, and there is no undo.`,
+          confirmLabel: 'Delete forever',
+          cancelLabel: 'No, keep them',
+          destructive: true,
+          onConfirm: () => deletePerson(row.person),
+        }),
+    });
   };
 
   const sheetActions = (person: Row): SheetAction[] =>
@@ -405,7 +422,7 @@ export default function PeopleScreen() {
                   ]}
                   accessibilityRole="button"
                   accessibilityLabel="Create or join a shared book">
-                  <MaterialIcons name="groups" size={22} color={ACCENT} />
+                  <MaterialIcons name="groups" size={22} color={theme.accent} />
                 </Pressable>
                 <Pressable
                   onPress={() => setAddOpen(true)}
@@ -416,7 +433,7 @@ export default function PeopleScreen() {
                   ]}
                   accessibilityRole="button"
                   accessibilityLabel="Add a person">
-                  <MaterialIcons name="person-add-alt" size={22} color={ACCENT} />
+                  <MaterialIcons name="person-add-alt" size={22} color={theme.accent} />
                 </Pressable>
               </View>
 
@@ -479,7 +496,7 @@ export default function PeopleScreen() {
                         style={[
                           styles.chip,
                           {
-                            backgroundColor: selected ? ACCENT : theme.backgroundElement,
+                            backgroundColor: selected ? theme.accent : theme.backgroundElement,
                           },
                         ]}
                         accessibilityRole="button"
@@ -511,7 +528,7 @@ export default function PeopleScreen() {
                         <MaterialIcons
                           name={icon}
                           size={18}
-                          color={selected ? ACCENT : theme.textSecondary}
+                          color={selected ? theme.accent : theme.textSecondary}
                         />
                       </Pressable>
                     );
@@ -527,22 +544,6 @@ export default function PeopleScreen() {
                 </ThemedText>
               )}
 
-              {view === 'table' && visible.length > 0 && (
-                <View style={[styles.tableHead, { borderBottomColor: theme.backgroundSelected }]}>
-                  <ThemedText type="small" themeColor="textSecondary" style={styles.colPerson}>
-                    Person
-                  </ThemedText>
-                  <ThemedText type="small" themeColor="textSecondary" style={styles.colNumber}>
-                    Gave
-                  </ThemedText>
-                  <ThemedText type="small" themeColor="textSecondary" style={styles.colNumber}>
-                    Took
-                  </ThemedText>
-                  <ThemedText type="small" themeColor="textSecondary" style={styles.colBalance}>
-                    Balance
-                  </ThemedText>
-                </View>
-              )}
             </View>
           }
           renderItem={({ item, index }) => {
@@ -562,8 +563,6 @@ export default function PeopleScreen() {
                 )}
                 {view === 'grid' ? (
                   <PersonTile {...rowProps(item)} />
-                ) : view === 'table' ? (
-                  <PersonTableRow {...rowProps(item)} />
                 ) : (
                   <PersonRow {...rowProps(item)} onMore={() => setSheetFor(item)} />
                 )}
@@ -620,53 +619,15 @@ export default function PeopleScreen() {
         onSubmit={submitRename}
         onCancel={() => setRenameFor(null)}
       />
-
-      {/* One warning for a blank slate, two for anyone with money or history. */}
-      <ConfirmModal
-        visible={deleteFor !== null}
-        destructive
-        title={
-          deleteFor?.bookId
-            ? `Leave ${deleteFor.person}?`
-            : deleteStage === 2
-              ? `Delete ${deleteFor?.person} for good?`
-              : `Delete ${deleteFor?.person}?`
-        }
-        message={
-          !deleteFor
-            ? undefined
-            : deleteFor.bookId
-              ? 'You’ll stop seeing this book and its entries on all your devices. The other person keeps the book and its full history.'
-              : deleteStage === 2
-                ? `Last check: ${deleteCost(deleteFor)} will be gone from every device, and there is no undo.`
-                : needsSecondWarning(deleteFor)
-                  ? `This removes ${deleteCost(deleteFor)}. Archive them instead to clear the list and keep the history.`
-                  : 'They have no entries yet, so nothing else is lost.'
-        }
-        confirmLabel={
-          deleteFor?.bookId ? 'Leave' : deleteStage === 2 ? 'Delete forever' : 'Delete'
-        }
-        cancelLabel={!deleteFor?.bookId && deleteStage === 2 ? 'No, keep them' : 'Cancel'}
-        onConfirm={confirmDelete}
-        onCancel={() => setDeleteFor(null)}
-      />
-
-      <ConfirmModal
-        visible={notice !== null}
-        title={notice ?? ''}
-        confirmLabel="OK"
-        cancelLabel="Dismiss"
-        onConfirm={() => setNotice(null)}
-        onCancel={() => setNotice(null)}
-      />
     </ThemedView>
   );
 }
 
 /** Marks a row as a book both people can see and write to. */
 function SharedBadge() {
+  const theme = useTheme();
   return (
-    <View style={[styles.badge, { backgroundColor: ACCENT }]}>
+    <View style={[styles.badge, { backgroundColor: theme.accent }]}>
       <MaterialIcons name="groups" size={11} color="#ffffff" />
       <ThemedText style={styles.badgeText}>Shared</ThemedText>
     </View>
@@ -740,7 +701,7 @@ function PersonRow({ person, onPress, onLongPress, onMore }: RowProps & { onMore
 
       <View style={styles.middle}>
         <View style={styles.nameRow}>
-          {!!person.pinned && <MaterialIcons name="push-pin" size={13} color={ACCENT} />}
+          {!!person.pinned && <MaterialIcons name="push-pin" size={13} color={theme.accent} />}
           <ThemedText type="smallBold" numberOfLines={1} style={styles.personName}>
             {person.person}
           </ThemedText>
@@ -788,7 +749,7 @@ function PersonTile({ person, onPress, onLongPress }: RowProps) {
       ]}
       accessibilityRole="button">
       {!!person.pinned && (
-        <MaterialIcons name="push-pin" size={13} color={ACCENT} style={styles.tilePin} />
+        <MaterialIcons name="push-pin" size={13} color={theme.accent} style={styles.tilePin} />
       )}
       <View style={[styles.tileAvatar, { backgroundColor: theme.backgroundSelected }]}>
         <ThemedText style={[styles.rowInitial, { color: settled ? theme.textSecondary : color }]}>
@@ -807,49 +768,6 @@ function PersonTile({ person, onPress, onLongPress }: RowProps) {
       )}
       <ThemedText type="smallBold" style={[styles.tileAmount, { color }]}>
         {formatMoney(Math.abs(person.balance))}
-      </ThemedText>
-    </Pressable>
-  );
-}
-
-/** Dense tabular row: what was given, what was taken, and the net. */
-function PersonTableRow({ person, onPress, onLongPress }: RowProps) {
-  const theme = useTheme();
-  const { settled, color, initial } = useStanding(person);
-
-  return (
-    <Pressable
-      onPress={onPress}
-      onLongPress={onLongPress}
-      delayLongPress={400}
-      style={({ pressed }) => [
-        styles.tableRow,
-        { borderBottomColor: theme.backgroundElement },
-        pressed && styles.pressed,
-      ]}
-      accessibilityRole="button">
-      <View style={[styles.colPerson, styles.tablePerson]}>
-        <View style={[styles.tableAvatar, { backgroundColor: theme.backgroundElement }]}>
-          <ThemedText
-            type="small"
-            style={{ color: settled ? theme.textSecondary : color, fontWeight: '700' }}>
-            {initial}
-          </ThemedText>
-        </View>
-        {!!person.pinned && <MaterialIcons name="push-pin" size={12} color={ACCENT} />}
-        {isShared(person) && <MaterialIcons name="groups" size={13} color={ACCENT} />}
-        <ThemedText type="smallBold" numberOfLines={1} style={styles.tableName}>
-          {person.person}
-        </ThemedText>
-      </View>
-      <ThemedText type="small" themeColor="textSecondary" style={styles.colNumber}>
-        {formatCompact(person.gave)}
-      </ThemedText>
-      <ThemedText type="small" themeColor="textSecondary" style={styles.colNumber}>
-        {formatCompact(person.took)}
-      </ThemedText>
-      <ThemedText type="smallBold" style={[styles.colBalance, { color }]}>
-        {settled ? '—' : `${person.balance > 0 ? '+' : '−'}${formatCompact(person.balance)}`}
       </ThemedText>
     </Pressable>
   );
@@ -1068,6 +986,9 @@ const styles = StyleSheet.create({
     padding: Spacing.three,
     marginBottom: Spacing.two,
     gap: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 150,
   },
   tilePin: {
     position: 'absolute',
@@ -1084,52 +1005,13 @@ const styles = StyleSheet.create({
   },
   tileName: {
     fontSize: 15,
+    textAlign: 'center',
   },
   tileAmount: {
     fontSize: 17,
     fontWeight: '700',
     marginTop: Spacing.one,
-  },
-  tableHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-    paddingBottom: Spacing.two,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  tableRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-    paddingVertical: Spacing.three,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  tablePerson: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.one,
-  },
-  tableAvatar: {
-    width: 26,
-    height: 26,
-    borderRadius: 999,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tableName: {
-    flexShrink: 1,
-  },
-  colPerson: {
-    flex: 1,
-    minWidth: 0,
-  },
-  colNumber: {
-    width: 56,
-    textAlign: 'right',
-  },
-  colBalance: {
-    width: 72,
-    textAlign: 'right',
+    textAlign: 'center',
   },
   hint: {
     textAlign: 'center',

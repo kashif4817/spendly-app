@@ -19,6 +19,7 @@ import {
   getCurrentUserId,
   getLocalUserId,
   hasAnyCategories,
+  migratePersonFlagIds,
   seedMissingPresets,
   seedPresets,
   setCurrentUserId,
@@ -29,7 +30,7 @@ import { googleSignInIdToken, googleSignOut, isGoogleConfigured } from '@/lib/go
 import { ensureDefaultReminder } from '@/lib/notifications';
 import { avatarUrl as getSignedAvatarUrl, getAvatarPath, upsertProfile } from '@/lib/profile';
 import { supabase } from '@/lib/supabase';
-import { runSync } from '@/sync/engine';
+import { getLastSyncFailure, runSync, type SyncFailure } from '@/sync/engine';
 import { startRealtime, stopRealtime } from '@/sync/realtime';
 import { readCachedUser } from '@/sync/session-cache';
 
@@ -52,6 +53,8 @@ type SyncContextValue = {
   avatarUrl: string | null;
   status: SyncStatus;
   lastSyncedAt: Date | null;
+  /** The last row the server refused, or null. Shown in Settings. */
+  failure: SyncFailure | null;
   /** Continue with Google. Throws on failure; GOOGLE_CANCELLED when dismissed. */
   signInWithGoogle: () => Promise<void>;
   logOut: () => Promise<void>;
@@ -83,6 +86,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<SyncStatus>('idle');
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
+  const [failure, setFailure] = useState<SyncFailure | null>(null);
   const busy = useRef(false);
   // The Google account photo, used as the avatar until the user uploads one.
   const googlePicture = useRef<string | null>(null);
@@ -101,6 +105,9 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       const ok = await runSync(userId);
       setStatus(ok ? 'idle' : 'offline');
       if (ok) setLastSyncedAt(new Date());
+      // Surfaced rather than swallowed: a row the server keeps refusing is a
+      // bug to be read, not a silent "offline".
+      setFailure(getLastSyncFailure());
       return ok;
     } finally {
       busy.current = false;
@@ -159,6 +166,8 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       applyIdentity(user);
       // Claim any data created before this account signed in (e.g. pre-sync data).
       adoptUnassignedData(userId);
+      // Re-key person flags that were saved under the old account-less id.
+      migratePersonFlagIds(userId);
 
       // Best-effort profile row + default reminder + avatar (never block login).
       upsertProfile(userId, user.email ?? null, metaString(user, 'full_name', 'name')).catch(() => {});
@@ -314,6 +323,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     avatarUrl,
     status,
     lastSyncedAt,
+    failure,
     signInWithGoogle,
     logOut,
     syncNow: sync,

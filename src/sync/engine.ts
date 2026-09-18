@@ -28,6 +28,46 @@ import { isSyncConfigured, PULL_BATCH_SIZE } from '@/sync/config';
 import { pullShared } from '@/sync/shared';
 
 /**
+ * The last row the server refused, kept so the UI can actually say what went
+ * wrong. Everything here is best-effort and silent by design, which is fine
+ * until something is permanently broken — then silence is the whole problem.
+ */
+export type SyncFailure = {
+  table: string;
+  rowId: string;
+  op: 'upsert' | 'delete';
+  code: string;
+  message: string;
+  at: string;
+};
+
+let lastFailure: SyncFailure | null = null;
+
+export function getLastSyncFailure(): SyncFailure | null {
+  return lastFailure;
+}
+
+export function clearLastSyncFailure(): void {
+  lastFailure = null;
+}
+
+function recordFailure(
+  table: string,
+  rowId: string,
+  op: 'upsert' | 'delete',
+  error: { code?: string; message?: string; details?: string }
+): void {
+  lastFailure = {
+    table,
+    rowId,
+    op,
+    code: error.code ?? '',
+    message: [error.message, error.details].filter(Boolean).join(' — ') || 'Unknown error',
+    at: new Date().toISOString(),
+  };
+}
+
+/**
  * True when Supabase says the table itself isn't there.
  *
  * A table added by an app update only exists in the project once its SQL has
@@ -65,7 +105,22 @@ function ownerColumn(table: AnyTable): string {
 }
 
 /** Send queued local changes to Supabase. Stops (returns false) on the first error. */
+/**
+ * Send queued local changes to Supabase.
+ *
+ * A row the server REFUSES (a policy rejection, a constraint, a bad value) is
+ * recorded and stepped over rather than aborting the run. It used to return
+ * false here, which meant one permanently-unacceptable row stopped the whole
+ * queue — and, because push runs before pull, stopped every other table from
+ * syncing too, for good. The row stays queued, so it still goes up the moment
+ * whatever the server objected to is fixed.
+ *
+ * A dropped connection is different: that throws rather than returning an
+ * error, and runSync's catch treats it as "offline, try again later".
+ */
 async function push(userId: string): Promise<boolean> {
+  let allSent = true;
+
   for (const entry of getOutbox()) {
     const table = entry.table_name;
 
@@ -78,8 +133,9 @@ async function push(userId: string): Promise<boolean> {
         .eq('id', entry.row_id)
         .eq(ownerColumn(table), userId);
       if (error) {
-        if (isMissingTable(error)) continue; // leave it queued for later
-        return false;
+        if (!isMissingTable(error)) recordFailure(table, entry.row_id, 'delete', error);
+        allSent = false;
+        continue; // leave it queued, and keep draining the rest
       }
     } else {
       const local = getRowForUpload(table, entry.row_id);
@@ -90,14 +146,16 @@ async function push(userId: string): Promise<boolean> {
       }
       const { error } = await supabase.from(table).upsert(buildUploadRow(table, local, userId));
       if (error) {
-        if (isMissingTable(error)) continue; // leave it queued for later
-        return false;
+        if (!isMissingTable(error)) recordFailure(table, entry.row_id, 'upsert', error);
+        allSent = false;
+        continue; // leave it queued, and keep draining the rest
       }
     }
 
     removeOutboxEntry(entry.seq);
   }
-  return true;
+
+  return allSent;
 }
 
 /** Fetch and apply everything changed since the cursor. Advances the cursor on success. */
@@ -149,9 +207,13 @@ async function pull(userId: string): Promise<boolean> {
 export async function runSync(userId: string): Promise<boolean> {
   if (!isSyncConfigured()) return false;
   try {
-    if (!(await push(userId))) return false;
+    // Note push's result does NOT short-circuit the pulls. A rejected row is a
+    // problem with that row, not with the connection, and blocking reads on it
+    // is what made a single bad row look like the app being permanently offline.
+    const pushed = await push(userId);
     if (!(await pull(userId))) return false;
-    return await pullShared();
+    if (!(await pullShared())) return false;
+    return pushed;
   } catch {
     return false; // network blip / offline — try again later
   }

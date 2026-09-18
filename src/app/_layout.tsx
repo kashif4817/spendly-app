@@ -2,13 +2,14 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
-import { StyleSheet, useColorScheme, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { AnimatedSplash } from '@/components/animated-splash';
 import { AuthGate } from '@/components/auth-gate';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { UpdatePrompt } from '@/components/update-prompt';
 import '@/db'; // opens the database and runs migrations on first import
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import { LockGate } from '@/lock/lock-gate';
 import { LockProvider } from '@/lock/provider';
 import { SyncProvider } from '@/sync/provider';

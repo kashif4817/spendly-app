@@ -5,7 +5,6 @@ import { FlatList, Pressable, Share, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ActionSheet } from '@/components/action-sheet';
-import { ConfirmModal } from '@/components/confirm-modal';
 import { PromptModal } from '@/components/prompt-modal';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -18,6 +17,7 @@ import {
   getCurrentUserId,
   getSharedBalance,
   getSharedBook,
+  getPendingRowIds,
   getSharedEntries,
   getSharedMemberName,
   setBookArchived,
@@ -27,6 +27,7 @@ import {
 import { useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
 import { formatRelativeDay } from '@/lib/date';
+import { confirm, notify } from '@/lib/confirm';
 import { formatMoney } from '@/lib/money';
 import {
   leaveSharedBook,
@@ -36,7 +37,6 @@ import {
 } from '@/sync/shared';
 import { useSync } from '@/sync/provider';
 
-const ACCENT = '#0B7C4F';
 const SETTLED_EPSILON = 0.005;
 
 export default function SharedBookScreen() {
@@ -50,15 +50,20 @@ export default function SharedBookScreen() {
   const book = useQuery(() => getSharedBook(bookId), [bookId]);
   const entries = useQuery(() => getSharedEntries(bookId), [bookId]);
   const balance = useQuery(() => getSharedBalance(bookId, me), [bookId, me]);
+  /**
+   * Entries still queued for upload. The outbox lives in the same database, so
+   * this re-runs when the push drains it and the pending mark clears itself.
+   * Anything that arrived from the other phone was never in our outbox, so it
+   * reads as synced — which is why their entries already looked right.
+   */
+  const pending = useQuery(() => new Set(getPendingRowIds('shared_entries')));
 
   const flags = useQuery(() => getBookFlags(bookId), [bookId]);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [codeOpen, setCodeOpen] = useState(false);
-  const [confirmLeave, setConfirmLeave] = useState(false);
-  const [confirmSettle, setConfirmSettle] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const setNotice = (message: string) => notify(message);
 
   // Who the other person is. Taken from the membership rows, not from the
   // entries — someone who has joined but not yet added anything is still very
@@ -107,7 +112,6 @@ export default function SharedBookScreen() {
   };
 
   const leave = async () => {
-    setConfirmLeave(false);
     try {
       await leaveSharedBook(bookId, me);
       router.back();
@@ -118,7 +122,6 @@ export default function SharedBookScreen() {
 
   /** Settle up: whoever is behind records a payment that zeroes the balance. */
   const settleUp = () => {
-    setConfirmSettle(false);
     if (settled || !otherId) return;
     // If they owe you, the settling payment comes from them.
     addSharedEntry({
@@ -175,7 +178,7 @@ export default function SharedBookScreen() {
                   <View
                     style={[
                       styles.liveDot,
-                      { backgroundColor: status === 'offline' ? theme.textSecondary : ACCENT },
+                      { backgroundColor: status === 'offline' ? theme.textSecondary : theme.accent },
                     ]}
                   />
                   <ThemedText type="small" themeColor="textSecondary">
@@ -192,6 +195,10 @@ export default function SharedBookScreen() {
                 <ThemedText style={[styles.balance, { color: statusColor }]}>
                   {formatMoney(Math.abs(balance))}
                 </ThemedText>
+                {/* The accounting term, same as a person's statement shows. */}
+                <ThemedText type="small" themeColor="textSecondary">
+                  {settled ? '' : owesYou ? 'Receivable' : 'Payable'}
+                </ThemedText>
               </ThemedView>
 
               {waiting && (
@@ -202,7 +209,7 @@ export default function SharedBookScreen() {
                     { backgroundColor: theme.backgroundElement },
                     pressed && styles.pressed,
                   ]}>
-                  <MaterialIcons name="person-add" size={20} color={ACCENT} />
+                  <MaterialIcons name="person-add" size={20} color={theme.accent} />
                   <View style={styles.inviteText}>
                     <ThemedText type="smallBold">Nobody has joined yet</ThemedText>
                     <ThemedText type="small" themeColor="textSecondary">
@@ -239,7 +246,19 @@ export default function SharedBookScreen() {
               </View>
 
               {!settled && otherId && (
-                <Pressable onPress={() => setConfirmSettle(true)} style={styles.settleBtn} hitSlop={8}>
+                <Pressable
+                  onPress={() =>
+                    confirm({
+                      title: 'Settle up?',
+                      message: `This records a payment of ${formatMoney(
+                        Math.abs(balance)
+                      )} to bring the balance to zero. ${theirLabel} will see it too.`,
+                      confirmLabel: 'Settle',
+                      onConfirm: settleUp,
+                    })
+                  }
+                  style={styles.settleBtn}
+                  hitSlop={8}>
                   <ThemedText type="smallBold">Settle up</ThemedText>
                 </Pressable>
               )}
@@ -254,6 +273,7 @@ export default function SharedBookScreen() {
               entry={item}
               me={me}
               otherName={otherName}
+              synced={!pending.has(item.id)}
               onPress={() =>
                 item.author_id === me
                   ? router.push(`/shared-entry?id=${encodeURIComponent(item.id)}` as Href)
@@ -289,7 +309,15 @@ export default function SharedBookScreen() {
             label: 'Leave book',
             icon: 'logout',
             destructive: true,
-            onPress: () => setConfirmLeave(true),
+            onPress: () =>
+              confirm({
+                title: 'Leave this book?',
+                message:
+                  'You\u2019ll stop seeing it and its entries on all your devices. The other person keeps the book and its full history.',
+                confirmLabel: 'Leave',
+                destructive: true,
+                onConfirm: leave,
+              }),
           },
         ]}
         onClose={() => setMenuOpen(false)}
@@ -315,35 +343,6 @@ export default function SharedBookScreen() {
         onSubmit={rename}
         onCancel={() => setRenameOpen(false)}
       />
-
-      <ConfirmModal
-        visible={confirmSettle}
-        title="Settle up?"
-        message={`This records a payment of ${formatMoney(
-          Math.abs(balance)
-        )} to bring the balance to zero. ${theirLabel} will see it too.`}
-        confirmLabel="Settle"
-        onCancel={() => setConfirmSettle(false)}
-        onConfirm={settleUp}
-      />
-
-      <ConfirmModal
-        visible={confirmLeave}
-        title="Leave this book?"
-        message="You'll stop seeing it and its entries on all your devices. The other person keeps the book and its full history."
-        confirmLabel="Leave"
-        onCancel={() => setConfirmLeave(false)}
-        onConfirm={leave}
-      />
-
-      <ConfirmModal
-        visible={notice !== null}
-        title={notice ?? ''}
-        confirmLabel="OK"
-        cancelLabel="Dismiss"
-        onCancel={() => setNotice(null)}
-        onConfirm={() => setNotice(null)}
-      />
     </ThemedView>
   );
 }
@@ -356,18 +355,20 @@ function EntryRow({
   entry,
   me,
   otherName,
+  synced,
   onPress,
 }: {
   entry: SharedEntry;
   me: string;
   otherName: string | null;
+  /** False while the entry is still queued to go up. */
+  synced: boolean;
   onPress: () => void;
 }) {
   const theme = useTheme();
   const youPaid = entry.payer_id === me;
   const color = youPaid ? MoneyColors.in : MoneyColors.out;
   const who = youPaid ? 'You paid' : `${otherName ?? 'They'} paid`;
-  const addedByOther = entry.author_id !== me;
 
   return (
     <Pressable
@@ -376,9 +377,14 @@ function EntryRow({
       <View style={styles.entryMiddle}>
         <View style={styles.entryWho}>
           <ThemedText type="smallBold">{who}</ThemedText>
-          {addedByOther && (
-            <MaterialIcons name="cloud-done" size={13} color={theme.textSecondary} />
-          )}
+          {/* On every entry, yours included — the useful question is "has the
+              other person got this yet?", not "who typed it?". */}
+          <MaterialIcons
+            name={synced ? 'cloud-done' : 'cloud-upload'}
+            size={13}
+            color={synced ? theme.textSecondary : theme.accent}
+            accessibilityLabel={synced ? 'Synced' : 'Waiting to sync'}
+          />
         </View>
         <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
           {entry.note?.trim() || formatRelativeDay(entry.day)}

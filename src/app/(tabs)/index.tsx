@@ -29,8 +29,6 @@ import { setWeekStart } from '@/lib/week-start';
 import { useSync } from '@/sync/provider';
 import { TransactionRow } from '@/components/transaction-row';
 
-const ACCENT = '#0B7C4F';
-
 export default function DashboardScreen() {
   const theme = useTheme();
   const router = useRouter();
@@ -91,7 +89,7 @@ export default function DashboardScreen() {
               {avatarUrl ? (
                 <Image source={{ uri: avatarUrl }} style={styles.avatar} contentFit="cover" />
               ) : (
-                <View style={[styles.avatar, styles.avatarPh]}>
+                <View style={[styles.avatar, styles.avatarPh, { backgroundColor: theme.accent }]}>
                   <ThemedText style={styles.avatarInitial}>{initial}</ThemedText>
                 </View>
               )}
@@ -134,7 +132,7 @@ export default function DashboardScreen() {
             <View style={styles.peopleHead}>
               <ThemedText type="smallBold">Money with people</ThemedText>
               <Pressable onPress={() => router.navigate('/loans' as Href)} hitSlop={8}>
-                <ThemedText type="small" style={{ color: ACCENT }}>
+                <ThemedText type="small" style={{ color: theme.accent }}>
                   View all
                 </ThemedText>
               </Pressable>
@@ -165,7 +163,7 @@ export default function DashboardScreen() {
               <View style={styles.recentHead}>
                 <ThemedText type="smallBold">Today’s activity</ThemedText>
                 <Pressable onPress={() => router.navigate('/reports' as Href)} hitSlop={8}>
-                  <ThemedText type="small" style={{ color: ACCENT }}>
+                  <ThemedText type="small" style={{ color: theme.accent }}>
                     See all
                   </ThemedText>
                 </Pressable>
@@ -197,10 +195,10 @@ export default function DashboardScreen() {
                     setMenuOpen(false);
                   }}
                   style={styles.menuItem}>
-                  <ThemedText type={active ? 'smallBold' : 'small'} style={active ? { color: ACCENT } : undefined}>
+                  <ThemedText type={active ? 'smallBold' : 'small'} style={active ? { color: theme.accent } : undefined}>
                     {p.label}
                   </ThemedText>
-                  {active && <MaterialIcons name="check" size={18} color={ACCENT} />}
+                  {active && <MaterialIcons name="check" size={18} color={theme.accent} />}
                 </Pressable>
               );
             })}
@@ -292,7 +290,6 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   avatarPh: {
-    backgroundColor: ACCENT,
     alignItems: 'center',
     justifyContent: 'center',
   },

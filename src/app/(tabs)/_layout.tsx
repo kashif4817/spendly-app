@@ -1,10 +1,7 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Tabs } from 'expo-router';
-import { useColorScheme } from 'react-native';
 
-import { Colors } from '@/constants/theme';
-
-const ACCENT = '#0B7C4F';
+import { useTheme } from '@/hooks/use-theme';
 
 /**
  * Stable JS bottom tabs (react-navigation). We moved off
@@ -12,14 +9,13 @@ const ACCENT = '#0B7C4F';
  * crash on the first authenticated render in production builds.
  */
 export default function TabsLayout() {
-  const scheme = useColorScheme();
-  const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
+  const colors = useTheme();
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: ACCENT,
+        tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.textSecondary,
         tabBarStyle: {
           backgroundColor: colors.background,

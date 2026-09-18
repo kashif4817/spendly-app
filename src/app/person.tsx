@@ -5,7 +5,6 @@ import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ActionSheet } from '@/components/action-sheet';
-import { ConfirmModal } from '@/components/confirm-modal';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
@@ -21,6 +20,7 @@ import {
 import { useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
 import { formatRelativeDay } from '@/lib/date';
+import { confirm } from '@/lib/confirm';
 import { formatMoney } from '@/lib/money';
 
 export default function PersonScreen() {
@@ -32,7 +32,6 @@ export default function PersonScreen() {
   const entries = useQuery(() => getPersonEntries(person), [person]);
   const balance = useQuery(() => getPersonBalance(person), [person]);
   const flags = useQuery(() => getPersonFlags(person), [person]);
-  const [confirmSettle, setConfirmSettle] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
   const settled = Math.abs(balance) < 0.005;
@@ -43,7 +42,6 @@ export default function PersonScreen() {
     router.push(`/ledger?person=${encodeURIComponent(person)}&direction=${direction}` as Href);
 
   const settleUp = () => {
-    setConfirmSettle(false);
     if (settled) return;
     addLedgerEntry({
       person,
@@ -111,7 +109,16 @@ export default function PersonScreen() {
               </View>
 
               {!settled && (
-                <Pressable onPress={() => setConfirmSettle(true)} style={styles.settleBtn} hitSlop={8}>
+                <Pressable onPress={() =>
+                    confirm({
+                      title: 'Settle up?',
+                      message: `This adds a ${owesYou ? 'received' : 'paid'} entry of ${formatMoney(
+                        Math.abs(balance)
+                      )} to bring ${person}’s balance to zero.`,
+                      confirmLabel: 'Settle',
+                      onConfirm: settleUp,
+                    })
+                  } style={styles.settleBtn} hitSlop={8}>
                   <ThemedText type="smallBold" style={{ color: theme.text }}>
                     Settle up
                   </ThemedText>
@@ -167,17 +174,6 @@ export default function PersonScreen() {
           },
         ]}
         onClose={() => setMenuOpen(false)}
-      />
-
-      <ConfirmModal
-        visible={confirmSettle}
-        title="Settle up?"
-        message={`This adds a ${owesYou ? 'received' : 'paid'} entry of ${formatMoney(
-          Math.abs(balance)
-        )} to bring ${person}’s balance to zero.`}
-        confirmLabel="Settle"
-        onCancel={() => setConfirmSettle(false)}
-        onConfirm={settleUp}
       />
     </ThemedView>
   );

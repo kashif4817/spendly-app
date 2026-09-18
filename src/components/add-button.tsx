@@ -3,10 +3,12 @@ import { useRouter, type Href } from 'expo-router';
 import { Platform, Pressable, StyleSheet } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
+import { useTheme } from '@/hooks/use-theme';
 import { Spacing } from '@/constants/theme';
 
 /** Floating "+ Add" button that opens a modal (the add-entry one by default). */
 export function AddButton({ href = '/entry' as Href, label = 'Add' }: { href?: Href; label?: string }) {
+  const theme = useTheme();
   const router = useRouter();
   // Sit just above the actual tab bar (its height varies with the device's
   // navigation-bar / safe-area inset), so the button never floats or overlaps.
@@ -16,6 +18,7 @@ export function AddButton({ href = '/entry' as Href, label = 'Add' }: { href?: H
       onPress={() => router.push(href)}
       style={({ pressed }) => [
         styles.fab,
+        { backgroundColor: theme.accent },
         { bottom: tabBarHeight + Spacing.three },
         pressed && styles.pressed,
       ]}
@@ -37,7 +40,6 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.two,
     paddingHorizontal: Spacing.four,
     borderRadius: 999,
-    backgroundColor: '#208AEF',
     shadowColor: '#000',
     shadowOpacity: 0.25,
     shadowRadius: 8,

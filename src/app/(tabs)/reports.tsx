@@ -278,7 +278,7 @@ export default function ReportsScreen() {
       <View style={styles.budgetHeader}>
         <ThemedText type="smallBold">Budgets · {formatMonth(today)}</ThemedText>
         <Pressable onPress={() => router.push('/budgets')} hitSlop={8}>
-          <ThemedText type="smallBold" style={styles.budgetEdit}>
+          <ThemedText type="smallBold" style={{ color: theme.accent }}>
             {budgets.length > 0 ? 'Edit' : 'Set up'}
           </ThemedText>
         </Pressable>
@@ -492,9 +492,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: Spacing.one,
-  },
-  budgetEdit: {
-    color: '#208AEF',
   },
   budgetCard: {
     borderRadius: Spacing.four,

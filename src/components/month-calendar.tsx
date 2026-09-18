@@ -19,8 +19,6 @@ import {
 } from '@/lib/date';
 import { formatCompact } from '@/lib/money';
 
-const ACCENT = '#0B7C4F';
-
 type Props = {
   /** Any day key inside the month to display. */
   month: string;
@@ -107,8 +105,8 @@ export function MonthCalendar({ month, selected, totals, onSelect, onChangeMonth
               <View
                 style={[
                   styles.day,
-                  key === today && { borderColor: ACCENT },
-                  isSelected && { backgroundColor: ACCENT, borderColor: ACCENT },
+                  key === today && { borderColor: theme.accent },
+                  isSelected && { backgroundColor: theme.accent, borderColor: theme.accent },
                 ]}>
                 <ThemedText style={[styles.dayNum, isSelected && styles.onAccent]}>
                   {i + 1}

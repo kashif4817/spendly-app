@@ -24,7 +24,30 @@ export const Colors = {
   },
 } as const;
 
-export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
+/**
+ * Accent colours offered in Settings.
+ *
+ * Each one is dark enough to carry white text as a filled button, and bright
+ * enough to read as a tint on both the white and the black background — the
+ * accent is used both ways all over the app, so a single value per theme has
+ * to work in both roles.
+ */
+export const Accents = {
+  emerald: { label: 'Emerald', color: '#0B7C4F' },
+  ocean: { label: 'Ocean', color: '#1F6FEB' },
+  violet: { label: 'Violet', color: '#6D3BEF' },
+  rose: { label: 'Rose', color: '#C2255C' },
+  amber: { label: 'Amber', color: '#B45309' },
+} as const;
+
+export type AccentKey = keyof typeof Accents;
+
+export const ACCENT_KEYS = Object.keys(Accents) as AccentKey[];
+
+/** The accent the app shipped with, and the fallback for anything unreadable. */
+export const DEFAULT_ACCENT: AccentKey = 'emerald';
+
+export type ThemeColor = (keyof typeof Colors.light & keyof typeof Colors.dark) | 'accent';
 
 export const Fonts = Platform.select({
   ios: {
