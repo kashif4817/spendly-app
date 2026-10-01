@@ -17,9 +17,14 @@ export default function TabsLayout() {
         headerShown: false,
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.textSecondary,
+        // The bar is a card like everything else, lifted off the tinted page.
         tabBarStyle: {
-          backgroundColor: colors.background,
-          borderTopColor: colors.backgroundElement,
+          backgroundColor: colors.backgroundElement,
+          borderTopColor: colors.backgroundSelected,
+        },
+        tabBarLabelStyle: {
+          fontSize: 11,
+          fontWeight: '600',
         },
       }}>
       <Tabs.Screen

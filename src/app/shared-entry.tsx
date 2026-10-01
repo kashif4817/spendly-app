@@ -1,19 +1,21 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  TextInput,
-  View,
-} from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 
+import {
+  AmountField,
+  DateStepper,
+  FormCard,
+  FormInput,
+  FormLink,
+  FormLinks,
+  FormRow,
+  PrimaryButton,
+} from '@/components/form';
 import { Segmented } from '@/components/segmented';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { CURRENCY, MoneyColors } from '@/constants/app';
+import { MoneyColors } from '@/constants/app';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import {
   addSharedEntry,
@@ -22,13 +24,15 @@ import {
   getCurrentUserId,
   getSharedEntry,
   getSharedMemberName,
+  restoreSharedEntry,
   updateSharedEntry,
 } from '@/db';
 import { useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
-import { addDays, formatRelativeDay, todayKey } from '@/lib/date';
+import { todayKey } from '@/lib/date';
 import { confirm } from '@/lib/confirm';
 import { parseAmount } from '@/lib/money';
+import { offerUndo } from '@/lib/undo';
 
 /**
  * Add or edit one entry in a shared book.
@@ -74,7 +78,18 @@ export default function SharedEntryScreen() {
   const save = () => {
     if (!canSave) return;
     if (isEdit) {
+      const before = existing;
       updateSharedEntry(existing.id, { payerId, amount: value, note: note.trim(), day });
+      if (before) {
+        offerUndo('Shared-book entry updated', () =>
+          updateSharedEntry(before.id, {
+            payerId: before.payer_id,
+            amount: before.amount,
+            note: before.note,
+            day: before.day,
+          })
+        );
+      }
     } else {
       addSharedEntry({ bookId, payerId, amount: value, note: note.trim(), day });
     }
@@ -84,25 +99,32 @@ export default function SharedEntryScreen() {
   const remove = () =>
     confirm({
       title: 'Delete this entry?',
-      message: 'It will disappear for both of you.',
+      message: 'It will disappear for both of you. You can undo for a few seconds.',
       confirmLabel: 'Delete',
       destructive: true,
       onConfirm: () => {
-        if (existing) deleteSharedEntry(existing.id);
+        if (existing) {
+          deleteSharedEntry(existing.id);
+          offerUndo('Shared-book entry deleted', () => restoreSharedEntry(existing));
+        }
         router.back();
       },
     });
 
   const youPaid = payerId === me;
+  const title = isEdit ? 'Edit shared entry' : 'Add shared entry';
 
   return (
     <ThemedView style={styles.container}>
-      <Stack.Screen options={{ title: isEdit ? 'Edit entry' : 'Add entry' }} />
+      <Stack.Screen options={{ title }} />
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <View style={styles.field}>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}>
+          <View style={styles.payer}>
             <ThemedText type="smallBold">Who paid?</ThemedText>
             <Segmented
               options={[
@@ -115,99 +137,52 @@ export default function SharedEntryScreen() {
                 else if (otherId) setPayerId(otherId);
               }}
             />
-            <ThemedText type="small" themeColor="textSecondary">
+            <ThemedText type="small" themeColor="textSecondary" style={styles.centered}>
               {youPaid
                 ? `Recorded as ${otherName} owing you.`
                 : `Recorded as you owing ${otherName}.`}
             </ThemedText>
           </View>
 
-          <View style={styles.field}>
-            <ThemedText type="smallBold">Amount</ThemedText>
-            <View style={[styles.amountRow, { backgroundColor: theme.backgroundElement }]}>
-              <ThemedText style={[styles.currency, { color: theme.textSecondary }]}>
-                {CURRENCY.trim()}
-              </ThemedText>
-              <TextInput
-                value={amount}
-                onChangeText={setAmount}
-                placeholder="0"
-                placeholderTextColor={theme.textSecondary}
-                keyboardType="numeric"
-                autoFocus={!isEdit}
-                style={[styles.amountInput, { color: theme.text }]}
-                accessibilityLabel="Amount"
+          <AmountField
+            value={amount}
+            onChangeText={setAmount}
+            color={youPaid ? MoneyColors.in : MoneyColors.out}
+            autoFocus={!isEdit}
+            editable={canEdit}
+          />
+
+          <FormCard>
+            <FormRow icon="notes" label="Note">
+              <FormInput
+                value={note}
+                onChangeText={setNote}
+                placeholder="What was it for?"
+                editable={canEdit}
               />
-            </View>
-          </View>
-
-          <View style={styles.field}>
-            <ThemedText type="smallBold">Note</ThemedText>
-            <TextInput
-              value={note}
-              onChangeText={setNote}
-              placeholder="What was it for?"
-              placeholderTextColor={theme.textSecondary}
-              style={[
-                styles.input,
-                { backgroundColor: theme.backgroundElement, color: theme.text },
-              ]}
-            />
-          </View>
-
-          <View style={styles.field}>
-            <ThemedText type="smallBold">Date</ThemedText>
-            <View style={[styles.dateRow, { backgroundColor: theme.backgroundElement }]}>
-              <Pressable
-                onPress={() => setDay(addDays(day, -1))}
-                hitSlop={8}
-                style={styles.dateBtn}
-                accessibilityRole="button"
-                accessibilityLabel="Previous day">
-                <ThemedText type="smallBold">‹</ThemedText>
-              </Pressable>
-              <ThemedText type="smallBold">{formatRelativeDay(day)}</ThemedText>
-              <Pressable
-                onPress={() => day < todayKey() && setDay(addDays(day, 1))}
-                hitSlop={8}
-                style={styles.dateBtn}
-                accessibilityRole="button"
-                accessibilityLabel="Next day">
-                <ThemedText type="smallBold" themeColor={day < todayKey() ? 'text' : 'textSecondary'}>
-                  ›
-                </ThemedText>
-              </Pressable>
-            </View>
-          </View>
+            </FormRow>
+            <FormRow icon="event" label="Date">
+              <DateStepper day={day} onChange={setDay} color={theme.accent} />
+            </FormRow>
+          </FormCard>
 
           {!canEdit && (
-            <ThemedText type="small" themeColor="textSecondary" style={styles.readOnly}>
+            <ThemedText type="small" themeColor="textSecondary" style={styles.centered}>
               {otherName} added this entry, so only they can change it.
             </ThemedText>
           )}
 
-          <Pressable
+          <PrimaryButton
+            label={isEdit ? 'Save changes' : title}
             onPress={save}
+            color={theme.accent}
             disabled={!canSave}
-            style={({ pressed }) => [
-              styles.submit,
-              { backgroundColor: theme.accent },
-              !canSave && styles.disabled,
-              pressed && styles.pressed,
-            ]}
-            accessibilityRole="button">
-            <ThemedText style={styles.submitLabel}>{isEdit ? 'Save changes' : 'Add entry'}</ThemedText>
-          </Pressable>
+          />
 
           {isEdit && canEdit && (
-            <Pressable
-              onPress={remove}
-              style={styles.deleteBtn}
-              accessibilityRole="button">
-              <ThemedText type="smallBold" style={{ color: MoneyColors.out }}>
-                Delete entry
-              </ThemedText>
-            </Pressable>
+            <FormLinks>
+              <FormLink label="Delete" icon="delete-outline" color={MoneyColors.out} onPress={remove} />
+            </FormLinks>
           )}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -220,73 +195,15 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   content: {
     padding: Spacing.four,
-    gap: Spacing.four,
+    gap: Spacing.three,
     alignSelf: 'center',
     width: '100%',
     maxWidth: MaxContentWidth,
   },
-  field: {
+  payer: {
     gap: Spacing.two,
   },
-  amountRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 12,
-    paddingHorizontal: Spacing.three,
-    gap: Spacing.two,
-  },
-  currency: {
-    fontSize: 24,
-    fontWeight: '700',
-  },
-  amountInput: {
-    flex: 1,
-    fontSize: 32,
-    fontWeight: '700',
-    paddingVertical: Spacing.three,
-  },
-  input: {
-    borderRadius: 12,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.three,
-    fontSize: 16,
-    minHeight: 50,
-  },
-  dateRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderRadius: 12,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.three,
-    minHeight: 50,
-  },
-  dateBtn: {
-    paddingHorizontal: Spacing.three,
-  },
-  readOnly: {
+  centered: {
     textAlign: 'center',
-  },
-  submit: {
-    borderRadius: 12,
-    paddingVertical: Spacing.three,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 52,
-  },
-  submitLabel: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  disabled: {
-    opacity: 0.5,
-  },
-  pressed: {
-    opacity: 0.85,
-  },
-  deleteBtn: {
-    alignItems: 'center',
-    paddingVertical: Spacing.two,
   },
 });

@@ -5,12 +5,12 @@
  * shown, so this one line controls the whole app.
  */
 
-/** Symbol shown in front of every amount, e.g. "Rs " "PKR " "$" "€ ". */
-export const CURRENCY = 'Rs ';
+/** Currency label shown in front of every amount, e.g. "PKR " "$" or "€ ". */
+export const CURRENCY = 'PKR ';
 
 /** Accent colors for money direction, shared across screens. */
 export const MoneyColors = {
-  in: '#1a9c5b', // income / money in  (green)
+  in: '#0A9A7E', // income / money in  (brand teal)
   out: '#e5484d', // expense / money out (red)
 } as const;
 

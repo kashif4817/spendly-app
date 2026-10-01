@@ -33,6 +33,7 @@ import { supabase } from '@/lib/supabase';
 import { getLastSyncFailure, runSync, type SyncFailure } from '@/sync/engine';
 import { startRealtime, stopRealtime } from '@/sync/realtime';
 import { readCachedUser } from '@/sync/session-cache';
+import { clearUndo } from '@/lib/undo';
 
 /** How often to retry a sync while the app is foregrounded (catches reconnects). */
 const SYNC_INTERVAL_MS = 30_000;
@@ -59,6 +60,12 @@ type SyncContextValue = {
   signInWithGoogle: () => Promise<void>;
   logOut: () => Promise<void>;
   syncNow: () => void;
+  /**
+   * A sync cycle that starts after this call — waiting out any cycle already
+   * running, since that one may have begun before the data you care about
+   * reached the server. Resolves true once everything is up to date.
+   */
+  refreshNow: () => Promise<boolean>;
   /** Re-fetch the avatar (after the user changes it). */
   reloadAvatar: () => Promise<void>;
 };
@@ -87,7 +94,9 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<SyncStatus>('idle');
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [failure, setFailure] = useState<SyncFailure | null>(null);
-  const busy = useRef(false);
+  // The cycle currently running, if any. Callers that arrive mid-cycle share
+  // it instead of starting a second one alongside.
+  const inflight = useRef<Promise<boolean> | null>(null);
   // The Google account photo, used as the avatar until the user uploads one.
   const googlePicture = useRef<string | null>(null);
   // Lets the realtime channel trigger a catch-up pull without being rebuilt
@@ -96,23 +105,32 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
 
   // Stable: reads the active user from the db module, so it never goes stale
   // inside long-lived listeners.
-  const sync = useCallback(async (): Promise<boolean> => {
+  const sync = useCallback((): Promise<boolean> => {
     const userId = getCurrentUserId();
-    if (!userId || busy.current) return false;
-    busy.current = true;
+    if (!userId) return Promise.resolve(false);
+    if (inflight.current) return inflight.current;
+
     setStatus('syncing');
-    try {
-      const ok = await runSync(userId);
-      setStatus(ok ? 'idle' : 'offline');
-      if (ok) setLastSyncedAt(new Date());
-      // Surfaced rather than swallowed: a row the server keeps refusing is a
-      // bug to be read, not a silent "offline".
-      setFailure(getLastSyncFailure());
-      return ok;
-    } finally {
-      busy.current = false;
-    }
+    const cycle = runSync(userId)
+      .then((ok) => {
+        setStatus(ok ? 'idle' : 'offline');
+        if (ok) setLastSyncedAt(new Date());
+        // Surfaced rather than swallowed: a row the server keeps refusing is a
+        // bug to be read, not a silent "offline".
+        setFailure(getLastSyncFailure());
+        return ok;
+      })
+      .finally(() => {
+        inflight.current = null;
+      });
+    inflight.current = cycle;
+    return cycle;
   }, []);
+
+  const refreshNow = useCallback(async (): Promise<boolean> => {
+    if (inflight.current) await inflight.current;
+    return sync();
+  }, [sync]);
 
   // Kept in a ref (via an effect, not during render — the React Compiler is on)
   // so the realtime channel can trigger a catch-up pull without being rebuilt.
@@ -160,7 +178,10 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       // A different account on a device that already holds someone else's data:
       // start clean so their rows never mix.
       const localUser = getLocalUserId();
-      if (localUser && localUser !== userId) wipeLocalData();
+      if (localUser && localUser !== userId) {
+        clearUndo();
+        wipeLocalData();
+      }
 
       setLocalUserId(userId);
       applyIdentity(user);
@@ -298,6 +319,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   }, [establishAccount]);
 
   const logOut = useCallback(async () => {
+    clearUndo();
     stopRealtime();
     await googleSignOut();
     try {
@@ -327,6 +349,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     signInWithGoogle,
     logOut,
     syncNow: sync,
+    refreshNow,
     reloadAvatar,
   };
 

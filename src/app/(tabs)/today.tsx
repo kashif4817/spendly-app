@@ -25,8 +25,8 @@ import {
 import { useCategoryEmoji, useQuery } from '@/db/hooks';
 import {
   addMonths,
+  formatFullDate,
   formatMonth,
-  formatRelativeDay,
   monthEnd,
   monthStart,
   todayKey,
@@ -134,12 +134,7 @@ function TodayTab() {
       showsVerticalScrollIndicator={false}
       ListHeaderComponent={
         <View style={styles.todayHeader}>
-          <ThemedText type="small" themeColor="textSecondary">
-            {formatRelativeDay(day)}
-          </ThemedText>
-          <View style={styles.cardWrap}>
-            <BalanceCard label="Today's balance" totals={totals} />
-          </View>
+          <BalanceCard label={`Today · ${formatFullDate(day)}`} totals={totals} />
           {overallBudget && (
             <Pressable onPress={() => router.push('/budgets')}>
               <ThemedView type="backgroundElement" style={styles.budgetCard}>
@@ -259,8 +254,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   title: {
-    fontSize: 40,
-    lineHeight: 46,
+    fontSize: 32,
+    lineHeight: 38,
+    fontWeight: '700',
   },
   jump: {
     paddingBottom: Spacing.two,
@@ -275,12 +271,9 @@ const styles = StyleSheet.create({
   todayHeader: {
     gap: Spacing.one,
   },
-  cardWrap: {
-    marginTop: Spacing.three,
-  },
   budgetCard: {
     marginTop: Spacing.two,
-    borderRadius: Spacing.four,
+    borderRadius: 20,
     padding: Spacing.three,
   },
   sectionTitle: {
@@ -302,8 +295,8 @@ const styles = StyleSheet.create({
   summary: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: Spacing.four,
-    padding: Spacing.four,
+    borderRadius: 20,
+    padding: Spacing.three,
   },
   stat: {
     flex: 1,

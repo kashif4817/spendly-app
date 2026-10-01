@@ -19,7 +19,7 @@ export function AddButton({ href = '/entry' as Href, label = 'Add' }: { href?: H
       style={({ pressed }) => [
         styles.fab,
         { backgroundColor: theme.accent },
-        { bottom: tabBarHeight + Spacing.three },
+        { bottom: tabBarHeight + Spacing.two },
         pressed && styles.pressed,
       ]}
       accessibilityRole="button"

@@ -17,6 +17,22 @@ export type Transaction = {
   receipt_path: string | null; // Supabase Storage path, or null
 };
 
+export type SpendlyBackupData = {
+  categories: Pick<Category, 'id' | 'name' | 'emoji' | 'type' | 'is_preset' | 'sort'>[];
+  transactions: Pick<Transaction, 'id' | 'type' | 'amount' | 'category' | 'note' | 'day' | 'created_at' | 'receipt_path'>[];
+  budgets: Pick<Budget, 'id' | 'category' | 'amount'>[];
+  ledgerEntries: Pick<LedgerEntry, 'id' | 'person' | 'direction' | 'amount' | 'note' | 'day' | 'created_at'>[];
+  people: ({ person: string } & Pick<PersonFlags, 'pinned' | 'archived'>)[];
+};
+
+export type BackupRestoreCounts = {
+  categories: number;
+  transactions: number;
+  budgets: number;
+  ledgerEntries: number;
+  people: number;
+};
+
 export type Category = {
   id: string;
   name: string;
@@ -729,6 +745,20 @@ export function deleteTransaction(id: string): void {
   enqueue('transactions', id, 'delete', nowIso());
 }
 
+/** Reinsert a deleted transaction for the temporary Undo action. */
+export function restoreTransaction(entry: Transaction): void {
+  const updatedAt = nowIso();
+  db.runSync(
+    `INSERT OR REPLACE INTO transactions
+       (id, user_id, type, amount, category, note, day, created_at, receipt_path, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    entry.id, currentUserId ?? '', entry.type, entry.amount, entry.category, entry.note,
+    entry.day, entry.created_at, entry.receipt_path, updatedAt
+  );
+  enqueue('transactions', entry.id, 'upsert', updatedAt);
+  notifyDbChanged();
+}
+
 /** Attach (or clear, with null) the Supabase Storage path of a receipt image. */
 export function setTransactionReceipt(id: string, path: string | null): void {
   const updatedAt = nowIso();
@@ -752,6 +782,23 @@ export function getTransactionsByDay(day: string): Transaction[] {
 export function getAllTransactions(): Transaction[] {
   return db.getAllSync<Transaction>(
     'SELECT * FROM transactions ORDER BY day DESC, created_at DESC'
+  );
+}
+
+/** The latest few entries of any date, newest first (for the dashboard). */
+export function getRecentTransactions(limit: number): Transaction[] {
+  return db.getAllSync<Transaction>(
+    'SELECT * FROM transactions ORDER BY day DESC, created_at DESC LIMIT ?',
+    limit
+  );
+}
+
+/** Entries within an inclusive day-key range, newest day first (for export). */
+export function getTransactionsInRange(startDay: string, endDay: string): Transaction[] {
+  return db.getAllSync<Transaction>(
+    'SELECT * FROM transactions WHERE day BETWEEN ? AND ? ORDER BY day DESC, created_at DESC',
+    startDay,
+    endDay
   );
 }
 
@@ -1218,6 +1265,20 @@ export function deleteLedgerEntry(id: string): void {
   enqueue('ledger_entries', id, 'delete', nowIso());
 }
 
+/** Reinsert a deleted ledger row for the temporary Undo action. */
+export function restoreLedgerEntry(entry: LedgerEntry): void {
+  const updatedAt = nowIso();
+  db.runSync(
+    `INSERT OR REPLACE INTO ledger_entries
+       (id, user_id, person, direction, amount, note, day, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    entry.id, currentUserId ?? '', entry.person, entry.direction, entry.amount,
+    entry.note, entry.day, entry.created_at, updatedAt
+  );
+  enqueue('ledger_entries', entry.id, 'upsert', updatedAt);
+  notifyDbChanged();
+}
+
 export function getLedgerEntry(id: string): LedgerEntry | null {
   return db.getFirstSync<LedgerEntry>('SELECT * FROM ledger_entries WHERE id = ?', id);
 }
@@ -1507,6 +1568,153 @@ export function getPersonEntries(person: string): LedgerEntry[] {
   );
 }
 
+/** Every ledger entry across all people, oldest first (for export). */
+export function getAllLedgerEntries(): LedgerEntry[] {
+  return db.getAllSync<LedgerEntry>(
+    'SELECT * FROM ledger_entries ORDER BY day ASC, created_at ASC'
+  );
+}
+
+/** Portable financial snapshot. Shared books remain server-managed. */
+export function getSpendlyBackupData(): SpendlyBackupData {
+  return {
+    categories: db.getAllSync<SpendlyBackupData['categories'][number]>(
+      'SELECT id, name, emoji, type, is_preset, sort FROM categories ORDER BY type, sort, name'
+    ),
+    transactions: db.getAllSync<SpendlyBackupData['transactions'][number]>(
+      `SELECT id, type, amount, category, note, day, created_at, receipt_path
+       FROM transactions ORDER BY day, created_at`
+    ),
+    budgets: db.getAllSync<SpendlyBackupData['budgets'][number]>(
+      'SELECT id, category, amount FROM budgets ORDER BY category'
+    ),
+    ledgerEntries: db.getAllSync<SpendlyBackupData['ledgerEntries'][number]>(
+      `SELECT id, person, direction, amount, note, day, created_at
+       FROM ledger_entries ORDER BY day, created_at`
+    ),
+    people: db.getAllSync<{ person: string; pinned: number; archived: number }>(
+      "SELECT person, pinned, archived FROM person_flags WHERE person NOT LIKE '#book:%' ORDER BY person"
+    ).map((row) => ({ person: row.person, pinned: !!row.pinned, archived: !!row.archived })),
+  };
+}
+
+/**
+ * Merge a validated backup without replacing local rows. Existing ids and
+ * unique category/budget names are kept; newly inserted rows enter normal sync.
+ */
+export function restoreSpendlyBackupData(
+  data: SpendlyBackupData,
+  options: { regenerateIds?: boolean } = {}
+): BackupRestoreCounts {
+  const counts: BackupRestoreCounts = {
+    categories: 0,
+    transactions: 0,
+    budgets: 0,
+    ledgerEntries: 0,
+    people: 0,
+  };
+  const userId = currentUserId ?? '';
+  const stamp = nowIso();
+  const ids = new Map<string, string>();
+  const importedId = (oldId: string) => {
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!options.regenerateIds && uuidPattern.test(oldId)) return oldId;
+    const known = ids.get(oldId);
+    if (known) return known;
+
+    let next: string;
+    if (uuidPattern.test(oldId) && uuidPattern.test(userId)) {
+      const source = oldId.replace(/-/g, '').toLowerCase();
+      const owner = userId.replace(/-/g, '').toLowerCase();
+      const mixed = Array.from(source, (char, index) =>
+        (parseInt(char, 16) ^ parseInt(owner[index], 16)).toString(16)
+      );
+      mixed[12] = '4';
+      mixed[16] = ((parseInt(mixed[16], 16) & 0x3) | 0x8).toString(16);
+      const hex = mixed.join('');
+      next = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    } else {
+      next = newId();
+    }
+    ids.set(oldId, next);
+    return next;
+  };
+
+  db.withTransactionSync(() => {
+    for (const row of data.categories) {
+      const result = db.runSync(
+        `INSERT OR IGNORE INTO categories
+           (id, user_id, name, emoji, type, is_preset, sort, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        importedId(row.id), userId, row.name, row.emoji, row.type, row.is_preset, row.sort, stamp
+      );
+      if (result.changes) {
+        counts.categories += 1;
+        enqueue('categories', importedId(row.id), 'upsert', stamp);
+      }
+    }
+
+    for (const row of data.transactions) {
+      const result = db.runSync(
+        `INSERT OR IGNORE INTO transactions
+           (id, user_id, type, amount, category, note, day, created_at, receipt_path, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        importedId(row.id), userId, row.type, row.amount, row.category, row.note, row.day,
+        row.created_at,
+        row.receipt_path?.startsWith(`${userId}/`) ? row.receipt_path : null,
+        stamp
+      );
+      if (result.changes) {
+        counts.transactions += 1;
+        enqueue('transactions', importedId(row.id), 'upsert', stamp);
+      }
+    }
+
+    for (const row of data.budgets) {
+      const result = db.runSync(
+        `INSERT OR IGNORE INTO budgets (id, user_id, category, amount, updated_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        importedId(row.id), userId, row.category, row.amount, stamp
+      );
+      if (result.changes) {
+        counts.budgets += 1;
+        enqueue('budgets', importedId(row.id), 'upsert', stamp);
+      }
+    }
+
+    for (const row of data.ledgerEntries) {
+      const result = db.runSync(
+        `INSERT OR IGNORE INTO ledger_entries
+           (id, user_id, person, direction, amount, note, day, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        importedId(row.id), userId, row.person, row.direction, row.amount, row.note, row.day,
+        row.created_at, stamp
+      );
+      if (result.changes) {
+        counts.ledgerEntries += 1;
+        enqueue('ledger_entries', importedId(row.id), 'upsert', stamp);
+      }
+    }
+
+    for (const row of data.people) {
+      const id = personFlagId(row.person, userId);
+      const result = db.runSync(
+        `INSERT OR IGNORE INTO person_flags
+           (id, user_id, person, pinned, archived, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        id, userId, row.person, Number(row.pinned), Number(row.archived), stamp
+      );
+      if (result.changes) {
+        counts.people += 1;
+        enqueue('person_flags', id, 'upsert', stamp);
+      }
+    }
+  });
+
+  notifyDbChanged();
+  return counts;
+}
+
 /** One person's net balance (>0 they owe you, <0 you owe them). */
 export function getPersonBalance(person: string): number {
   const row = db.getFirstSync<{ balance: number }>(
@@ -1682,6 +1890,20 @@ export function deleteSharedEntry(id: string): void {
   enqueue('shared_entries', id, 'delete', nowIso());
 }
 
+/** Reinsert a deleted shared entry for the temporary Undo action. */
+export function restoreSharedEntry(entry: SharedEntry): void {
+  const updatedAt = nowIso();
+  db.runSync(
+    `INSERT OR REPLACE INTO shared_entries
+       (id, book_id, author_id, payer_id, amount, note, day, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    entry.id, entry.book_id, entry.author_id, entry.payer_id, entry.amount,
+    entry.note, entry.day, entry.created_at, updatedAt
+  );
+  enqueue('shared_entries', entry.id, 'upsert', updatedAt);
+  notifyDbChanged();
+}
+
 export function getSharedEntry(id: string): SharedEntry | null {
   return db.getFirstSync<SharedEntry>('SELECT * FROM shared_entries WHERE id = ?', id);
 }
@@ -1790,6 +2012,21 @@ export function getSharedBookSummaries(userId: string): SharedBookSummary[] {
       pending: !other,
     };
   });
+}
+
+/**
+ * Receivable / payable across your own ledger AND your shared books — the
+ * headline the Loans tab shows, and the dashboard repeats. Archived books are
+ * left out, the same way getLedgerTotals() leaves out archived people.
+ */
+export function combineLedgerTotals(own: LedgerTotals, books: SharedBookSummary[]): LedgerTotals {
+  let { receivable, payable } = own;
+  for (const book of books) {
+    if (book.archived) continue;
+    if (book.balance > 0) receivable += book.balance;
+    else payable += -book.balance;
+  }
+  return { receivable, payable };
 }
 
 /** The shared pull cursor. Separate from the personal one — different lane. */

@@ -12,6 +12,7 @@ import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
 import {
+  combineLedgerTotals,
   createPerson,
   deletePerson,
   getCurrentUserId,
@@ -39,14 +40,17 @@ import { leaveSharedBook, renameSharedBook, SharedBookError } from '@/sync/share
 const SETTLED_EPSILON = 0.005;
 
 /** Which slice of people is on screen. */
-type Filter = 'all' | 'get' | 'pay' | 'settled' | 'archived';
+type Filter = 'all' | 'archived' | 'people' | 'shared' | 'get' | 'pay' | 'settled';
 
+// Archived sits right after All so it's in view without scrolling the row.
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'All' },
+  { key: 'archived', label: 'Archived' },
+  { key: 'people', label: 'People' },
+  { key: 'shared', label: 'Shared books' },
   { key: 'get', label: 'You’ll get' },
   { key: 'pay', label: 'You’ll pay' },
   { key: 'settled', label: 'Settled' },
-  { key: 'archived', label: 'Archived' },
 ];
 
 const VIEWS: { key: PeopleView; icon: React.ComponentProps<typeof MaterialIcons>['name']; label: string }[] = [
@@ -98,6 +102,8 @@ function matchesFilter(person: Row, filter: Filter): boolean {
   // Archived people live in their own view and nowhere else, so an archived
   // person never quietly pads the other tabs' counts.
   if (filter === 'archived') return !!person.archived;
+  if (filter === 'people') return !isShared(person) && !person.archived;
+  if (filter === 'shared') return isShared(person) && !person.archived;
   if (person.archived) return false;
   if (filter === 'get') return person.balance > SETTLED_EPSILON;
   if (filter === 'pay') return person.balance < -SETTLED_EPSILON;
@@ -165,7 +171,7 @@ export default function PeopleScreen() {
   const query = search.trim().toLowerCase();
 
   const counts = useMemo(() => {
-    const tally = { all: 0, get: 0, pay: 0, settled: 0, archived: 0 } as Record<Filter, number>;
+    const tally = { all: 0, archived: 0, people: 0, shared: 0, get: 0, pay: 0, settled: 0 } as Record<Filter, number>;
     for (const person of people) {
       for (const { key } of FILTERS) if (matchesFilter(person, key)) tally[key] += 1;
     }
@@ -197,16 +203,9 @@ export default function PeopleScreen() {
   }, [people]);
 
   // getLedgerTotals() only knows your own ledger, so fold the shared books in
-  // — money owed through a shared book is still money owed.
-  const combinedTotals = useMemo(() => {
-    let { receivable, payable } = totals;
-    for (const book of books) {
-      if (book.archived) continue;
-      if (book.balance > 0) receivable += book.balance;
-      else payable += -book.balance;
-    }
-    return { receivable, payable };
-  }, [totals, books]);
+  // — money owed through a shared book is still money owed. The dashboard uses
+  // the same function, so the two screens can't disagree.
+  const combinedTotals = useMemo(() => combineLedgerTotals(totals, books), [totals, books]);
 
   const shownTotals = filter === 'archived' ? archivedTotals : combinedTotals;
   const pinnedCount = visible.filter((p) => p.pinned).length;
@@ -456,60 +455,34 @@ export default function PeopleScreen() {
                 </View>
               </View>
 
-              <View style={[styles.searchBar, { backgroundColor: theme.backgroundElement }]}>
-                <MaterialIcons name="search" size={20} color={theme.textSecondary} />
-                <TextInput
-                  value={search}
-                  onChangeText={setSearch}
-                  placeholder="Search people"
-                  placeholderTextColor={theme.textSecondary}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  returnKeyType="search"
-                  accessibilityLabel="Search people"
-                  style={[styles.searchInput, { color: theme.text }]}
-                />
-                {search.length > 0 && (
-                  <Pressable
-                    onPress={() => setSearch('')}
-                    hitSlop={8}
-                    accessibilityRole="button"
-                    accessibilityLabel="Clear search">
-                    <MaterialIcons name="close" size={20} color={theme.textSecondary} />
-                  </Pressable>
-                )}
-              </View>
-
-              <View style={styles.controls}>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.chips}>
-                  {FILTERS.map(({ key, label }) => {
-                    // Archived only earns a chip once something is in there.
-                    if (key === 'archived' && counts.archived === 0) return null;
-                    const selected = key === filter;
-                    return (
-                      <Pressable
-                        key={key}
-                        onPress={() => setFilter(key)}
-                        style={[
-                          styles.chip,
-                          {
-                            backgroundColor: selected ? theme.accent : theme.backgroundElement,
-                          },
-                        ]}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected }}>
-                        <ThemedText
-                          type="smallBold"
-                          style={{ color: selected ? '#ffffff' : theme.textSecondary }}>
-                          {label} {counts[key]}
-                        </ThemedText>
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
+              <View style={styles.searchRow}>
+                <View style={[styles.searchBar, { backgroundColor: theme.backgroundElement }]}>
+                  <MaterialIcons name="search" size={20} color={theme.textSecondary} />
+                  <TextInput
+                    value={search}
+                    onChangeText={setSearch}
+                    // Short enough for one line beside the view switch on a
+                    // narrow phone; a longer hint wrapped onto two.
+                    placeholder="Search by name"
+                    placeholderTextColor={theme.textSecondary}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="search"
+                    multiline={false}
+                    numberOfLines={1}
+                    accessibilityLabel="Search people and shared books"
+                    style={[styles.searchInput, { color: theme.text }]}
+                  />
+                  {search.length > 0 && (
+                    <Pressable
+                      onPress={() => setSearch('')}
+                      hitSlop={8}
+                      accessibilityRole="button"
+                      accessibilityLabel="Clear search">
+                      <MaterialIcons name="close" size={20} color={theme.textSecondary} />
+                    </Pressable>
+                  )}
+                </View>
 
                 <View style={[styles.viewSwitch, { backgroundColor: theme.backgroundElement }]}>
                   {VIEWS.map(({ key, icon, label }) => {
@@ -527,7 +500,7 @@ export default function PeopleScreen() {
                         accessibilityState={{ selected }}>
                         <MaterialIcons
                           name={icon}
-                          size={18}
+                          size={20}
                           color={selected ? theme.accent : theme.textSecondary}
                         />
                       </Pressable>
@@ -535,6 +508,37 @@ export default function PeopleScreen() {
                   })}
                 </View>
               </View>
+
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.chipRow}
+                contentContainerStyle={styles.chips}>
+                {FILTERS.map(({ key, label }) => {
+                  const selected = key === filter;
+                  const color = selected ? '#ffffff' : theme.textSecondary;
+                  return (
+                    <Pressable
+                      key={key}
+                      onPress={() => setFilter(key)}
+                      style={[
+                        styles.chip,
+                        {
+                          backgroundColor: selected ? theme.accent : theme.backgroundElement,
+                        },
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}>
+                      {/* Archived is a separate shelf rather than a slice of
+                          balances, so it gets an icon to set it apart. */}
+                      {key === 'archived' && <MaterialIcons name="archive" size={14} color={color} />}
+                      <ThemedText type="smallBold" style={{ color }}>
+                        {label} {counts[key]}
+                      </ThemedText>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
 
               {query.length > 0 && (
                 <ThemedText type="small" themeColor="textSecondary" style={styles.searchMeta}>
@@ -581,6 +585,8 @@ export default function PeopleScreen() {
               filter={filter}
               search={search.trim()}
               hasAnyone={people.length > 0}
+              onAddPerson={() => setAddOpen(true)}
+              onAddShared={() => router.push('/shared-new' as Href)}
             />
           }
         />
@@ -773,29 +779,52 @@ function PersonTile({ person, onPress, onLongPress }: RowProps) {
   );
 }
 
-/** Why the list is empty depends on how you got here, so say the right thing. */
+function EmptyAction({ label, onPress }: { label: string; onPress: () => void }) {
+  const theme = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.emptyAction,
+        { backgroundColor: theme.accent },
+        pressed && styles.pressed,
+      ]}
+      accessibilityRole="button">
+      <ThemedText type="smallBold" style={{ color: '#ffffff' }}>{label}</ThemedText>
+    </Pressable>
+  );
+}
+
 function EmptyState({
   filter,
   search,
   hasAnyone,
+  onAddPerson,
+  onAddShared,
 }: {
   filter: Filter;
   search: string;
   hasAnyone: boolean;
+  onAddPerson: () => void;
+  onAddShared: () => void;
 }) {
   const [emoji, title, hint] = search
-    ? ['🔍', 'No matches', `Nobody named “${search}” in this view.`]
+    ? ['🔎', 'No matches', `No results for “${search}” in this view.`]
     : !hasAnyone
-      ? ['🤝', 'No loans yet', 'Tap “＋ Add” to record a give or take, or add a person to start your list.']
-      : filter === 'archived'
-        ? ['🗄️', 'Nothing archived', 'Press and hold anyone to archive them. Their history is kept.']
-        : filter === 'get'
-          ? ['✅', 'Nobody owes you', 'Everyone you’ve lent to has paid you back.']
-          : filter === 'pay'
-            ? ['✅', 'You owe nobody', 'You’re all square with everyone.']
-            : filter === 'settled'
-              ? ['📂', 'Nobody settled yet', 'People show up here once their balance reaches zero.']
-              : ['🤝', 'No people here', 'Add an entry to start tracking someone.'];
+      ? ['📒', 'No entries yet', 'Add a person or create a shared book to get started.']
+      : filter === 'people'
+        ? ['👤', 'No people yet', 'Add someone to track personal loans.']
+        : filter === 'shared'
+          ? ['📚', 'No shared books yet', 'Create a book or join one with an invite code.']
+          : filter === 'archived'
+            ? ['📂', 'Nothing archived', 'Press and hold an item to archive it. Its history is kept.']
+            : filter === 'get'
+              ? ['✓', 'Nobody owes you', 'Everyone you lent to has paid you back.']
+              : filter === 'pay'
+                ? ['✓', 'You owe nobody', 'You are all square with everyone.']
+                : filter === 'settled'
+                  ? ['📒', 'Nobody settled yet', 'Items appear here once their balance reaches zero.']
+                  : ['📒', 'No entries here', 'Add an entry to start tracking a balance.'];
 
   return (
     <View style={styles.empty}>
@@ -804,10 +833,15 @@ function EmptyState({
       <ThemedText type="small" themeColor="textSecondary" style={styles.emptyHint}>
         {hint}
       </ThemedText>
+      {!search && (filter === 'people' || (filter === 'all' && !hasAnyone)) && (
+        <EmptyAction label="Add a person" onPress={onAddPerson} />
+      )}
+      {!search && (filter === 'shared' || (filter === 'all' && !hasAnyone)) && (
+        <EmptyAction label="Create or join a shared book" onPress={onAddShared} />
+      )}
     </View>
   );
 }
-
 const styles = StyleSheet.create({
   container: { flex: 1 },
   safeArea: {
@@ -841,8 +875,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   title: {
-    fontSize: 40,
-    lineHeight: 46,
+    fontSize: 32,
+    lineHeight: 38,
+    fontWeight: '700',
   },
   tiles: {
     flexDirection: 'row',
@@ -852,52 +887,63 @@ const styles = StyleSheet.create({
   },
   tile: {
     flex: 1,
-    borderRadius: 16,
+    borderRadius: 20,
     padding: Spacing.three,
     gap: 2,
   },
   tileValue: {
-    fontSize: 22,
+    fontSize: 20,
+    lineHeight: 26,
     fontWeight: '700',
   },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: Spacing.two,
+    marginBottom: Spacing.two,
+  },
   searchBar: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
     borderRadius: 12,
     paddingHorizontal: Spacing.three,
-    marginBottom: Spacing.two,
   },
   searchInput: {
     flex: 1,
     paddingVertical: Spacing.three,
-    fontSize: 16,
+    fontSize: 15,
   },
-  controls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
+  chipRow: {
+    // Bleed to the screen edges so chips scroll out of view rather than
+    // being cut off at the content padding.
+    marginHorizontal: -Spacing.four,
     marginBottom: Spacing.two,
   },
   chips: {
     gap: Spacing.two,
-    paddingRight: Spacing.two,
+    paddingHorizontal: Spacing.four,
   },
   chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
     borderRadius: 999,
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.two,
   },
+  // Matches the search bar's height and corners, so the two read as one row.
   viewSwitch: {
     flexDirection: 'row',
-    borderRadius: 999,
-    padding: Spacing.half,
+    alignItems: 'stretch',
+    borderRadius: 12,
+    padding: Spacing.one,
     gap: Spacing.half,
   },
   viewButton: {
-    width: 34,
-    height: 30,
-    borderRadius: 999,
+    width: 40,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1030,7 +1076,16 @@ const styles = StyleSheet.create({
     fontSize: 40,
     marginBottom: Spacing.one,
   },
+  emptyAction: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.three,
+    borderRadius: 12,
+    marginTop: Spacing.one,
+  },
   emptyHint: {
     textAlign: 'center',
   },
 });
+
+

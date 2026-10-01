@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, SectionList, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { BalanceCard } from '@/components/balance-card';
 import { HBar, VerticalBars, type VerticalBar } from '@/components/bar-chart';
 import { BudgetBar } from '@/components/budget-bar';
+import { DayHeader } from '@/components/day-header';
 import { Segmented } from '@/components/segmented';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -20,7 +21,6 @@ import {
   getTotals,
   OVERALL_BUDGET,
   type EntryType,
-  type Transaction,
 } from '@/db';
 import { useCategoryEmoji, useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
@@ -30,6 +30,7 @@ import {
   formatMonth,
   formatRelativeDay,
   formatWeekRange,
+  groupByDay,
   monthEnd,
   monthStart,
   todayKey,
@@ -41,17 +42,17 @@ import { formatMoney, formatSigned } from '@/lib/money';
 
 type Period = 'daily' | 'weekly';
 
-type DaySection = {
-  day: string;
-  net: number;
-  data: Transaction[];
-};
-
 export default function ReportsScreen() {
   const router = useRouter();
   const [period, setPeriod] = useState<Period>('daily');
   const [anchor, setAnchor] = useState(todayKey());
   const [breakdown, setBreakdown] = useState<EntryType>('out');
+  // The dashboard's "Income" shortcut opens this tab on the income breakdown.
+  // `at` changes on every tap, so it works again after switching back to Out.
+  const params = useLocalSearchParams<{ breakdown?: string; at?: string }>();
+  useEffect(() => {
+    if (params.breakdown === 'in' || params.breakdown === 'out') setBreakdown(params.breakdown);
+  }, [params.breakdown, params.at]);
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
   const emojiFor = useCategoryEmoji();
   const theme = useTheme();
@@ -142,24 +143,16 @@ export default function ReportsScreen() {
     );
   }, [all, search]);
 
-  const sections = useMemo<DaySection[]>(() => {
-    const map = new Map<string, DaySection>();
-    for (const tx of filtered) {
-      let section = map.get(tx.day);
-      if (!section) {
-        section = { day: tx.day, net: 0, data: [] };
-        map.set(tx.day, section);
-      }
-      section.data.push(tx);
-      section.net += tx.type === 'in' ? tx.amount : -tx.amount;
-    }
-    return Array.from(map.values());
-  }, [filtered]);
+  const sections = useMemo(
+    () => groupByDay(filtered, (tx) => (tx.type === 'in' ? tx.amount : -tx.amount)),
+    [filtered]
+  );
 
   const header = (
     <View style={styles.header}>
-      <ThemedText type="title" style={styles.title}>
-        Reports
+      {/* The tab stays "Reports"; the page says what it actually covers. */}
+      <ThemedText type="title" style={styles.title} numberOfLines={1} adjustsFontSizeToFit>
+        Expense Reports
       </ThemedText>
 
       <Segmented
@@ -334,12 +327,7 @@ export default function ReportsScreen() {
           keyboardShouldPersistTaps="handled"
           ListHeaderComponent={header}
           renderSectionHeader={({ section }) => (
-            <View style={styles.sectionHeader}>
-              <ThemedText type="smallBold">{formatRelativeDay(section.day)}</ThemedText>
-              <ThemedText type="small" themeColor="textSecondary">
-                {formatSigned(section.net)}
-              </ThemedText>
-            </View>
+            <DayHeader day={section.day} net={section.net} />
           )}
           renderItem={({ item }) => (
             <TransactionRow
@@ -392,8 +380,9 @@ const styles = StyleSheet.create({
     gap: Spacing.three,
   },
   title: {
-    fontSize: 40,
-    lineHeight: 46,
+    fontSize: 32,
+    lineHeight: 38,
+    fontWeight: '700',
   },
   nav: {
     flexDirection: 'row',
@@ -418,7 +407,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   chartCard: {
-    borderRadius: Spacing.four,
+    borderRadius: 20,
     padding: Spacing.four,
     gap: Spacing.three,
   },
@@ -494,7 +483,7 @@ const styles = StyleSheet.create({
     marginTop: Spacing.one,
   },
   budgetCard: {
-    borderRadius: Spacing.four,
+    borderRadius: 20,
     padding: Spacing.four,
     gap: Spacing.three,
   },
@@ -507,13 +496,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.three,
     fontSize: 16,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: Spacing.four,
-    paddingBottom: Spacing.one,
   },
   empty: {
     alignItems: 'center',

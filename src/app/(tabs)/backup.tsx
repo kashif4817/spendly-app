@@ -1,12 +1,13 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import Constants from 'expo-constants';
-import { Image } from 'expo-image';
 import { useRouter, type Href } from 'expo-router';
 import * as Updates from 'expo-updates';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { BrandMark } from '@/components/brand-mark';
+import { ExportSheet } from '@/components/export-sheet';
 import { Segmented } from '@/components/segmented';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -20,8 +21,15 @@ import {
 import { useAccentKey, useAppearanceMode } from '@/hooks/use-appearance';
 import { useTheme } from '@/hooks/use-theme';
 import { useWeekStart } from '@/hooks/use-week-start';
-import { exportCsv, exportPdf } from '@/lib/export';
+import {
+  exportCsv,
+  exportPdf,
+  type ExportFormat,
+  type ExportPeriod,
+  type ExportSection,
+} from '@/lib/export';
 import { confirm } from '@/lib/confirm';
+import { exportBackup, pickBackup, restoreBackup, summarizeBackup, type PickedBackup } from '@/lib/backup';
 import { applyReminder, formatTime, getReminderPrefs } from '@/lib/notifications';
 import { MODE_OPTIONS, setAccentKey, setAppearanceMode } from '@/lib/appearance';
 import { setWeekStart } from '@/lib/week-start';
@@ -29,7 +37,6 @@ import { useLock } from '@/lock/provider';
 import { useSync } from '@/sync/provider';
 
 const DANGER = '#e5484d';
-const LOGO = require('../../../assets/images/spendly-logo.png');
 
 /**
  * "Version 1.0.0 · 3f9ac2b1" — the app version plus the short id of the OTA
@@ -65,7 +72,13 @@ export default function SettingsScreen() {
   const accentKey = useAccentKey();
 
   const [reminder, setReminder] = useState({ enabled: false, hour: 21, minute: 0 });
-  const [exporting, setExporting] = useState<null | 'csv' | 'pdf'>(null);
+  const [exporting, setExporting] = useState<null | ExportFormat>(null);
+  // The format outlives the sheet so its title doesn't flicker while it fades out.
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [sheetFormat, setSheetFormat] = useState<ExportFormat>('pdf');
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoreCandidate, setRestoreCandidate] = useState<PickedBackup | null>(null);
 
   useEffect(() => {
     getReminderPrefs().then(setReminder);
@@ -91,12 +104,19 @@ export default function SettingsScreen() {
     if (reminder.enabled) await applyReminder(true, h, m);
   };
 
-  const doExport = async (kind: 'csv' | 'pdf') => {
+  const openExport = (kind: ExportFormat) => {
+    if (exporting) return;
+    setSheetFormat(kind);
+    setSheetOpen(true);
+  };
+
+  const doExport = async (kind: ExportFormat, sections: ExportSection[], period: ExportPeriod) => {
     if (exporting) return;
     setExporting(kind);
     try {
-      const res = await (kind === 'csv' ? exportCsv() : exportPdf());
-      if (res === 'empty') Alert.alert('Nothing to export yet', 'Add a few transactions first.');
+      const res = await (kind === 'csv' ? exportCsv(sections, period) : exportPdf(sections, period));
+      if (res === 'empty')
+        Alert.alert('Nothing to export', 'There’s nothing in what you picked for this period.');
       else if (res === 'unavailable')
         Alert.alert('Unavailable', 'Sharing isn’t available on this device.');
     } catch {
@@ -105,6 +125,54 @@ export default function SettingsScreen() {
       setExporting(null);
     }
   };
+
+  const createBackup = async () => {
+    if (backupBusy || restoreBusy) return;
+    setBackupBusy(true);
+    try {
+      const result = await exportBackup();
+      if (result === 'unavailable') Alert.alert('Unavailable', 'Sharing isn’t available on this device.');
+    } catch {
+      Alert.alert('Backup failed', 'Couldn’t create the backup file. Please try again.');
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const chooseBackup = async () => {
+    if (backupBusy || restoreBusy) return;
+    setRestoreBusy(true);
+    try {
+      const picked = await pickBackup();
+      if (picked) setRestoreCandidate(picked);
+    } catch (error) {
+      Alert.alert('Couldn’t open backup', error instanceof Error ? error.message : 'Choose a valid Spendly backup file.');
+    } finally {
+      setRestoreBusy(false);
+    }
+  };
+
+  const importBackup = () => {
+    if (!restoreCandidate || restoreBusy) return;
+    setRestoreBusy(true);
+    try {
+      const counts = restoreBackup(restoreCandidate.backup);
+      const added = counts.categories + counts.transactions + counts.budgets + counts.ledgerEntries + counts.people;
+      setRestoreCandidate(null);
+      Alert.alert(
+        added ? 'Restore complete' : 'Nothing new to import',
+        added
+          ? `${counts.transactions} expenses or income entries, ${counts.ledgerEntries} loan entries, ${counts.budgets} budgets and ${counts.categories} categories restored. Existing records were kept.`
+          : 'All records in this backup already exist here. Nothing was changed.'
+      );
+    } catch {
+      Alert.alert('Restore failed', 'No backup data was imported. Please try again.');
+    } finally {
+      setRestoreBusy(false);
+    }
+  };
+
+  const restoreSummary = restoreCandidate ? summarizeBackup(restoreCandidate.backup) : null;
 
   const card = { backgroundColor: theme.backgroundElement };
 
@@ -253,9 +321,10 @@ export default function SettingsScreen() {
                         style={[
                           styles.swatch,
                           { backgroundColor: Accents[key].color },
-                          // The ring is drawn in the page background so it reads
-                          // as a gap, whichever theme is on.
-                          selected && { borderColor: theme.background },
+                          // The swatches sit on a card the same colour as the
+                          // page's cards, so a background-coloured ring would
+                          // vanish; the ink colour reads on either theme.
+                          selected && { borderColor: theme.text },
                         ]}>
                         {selected && <MaterialIcons name="check" size={18} color="#ffffff" />}
                       </View>
@@ -340,7 +409,7 @@ export default function SettingsScreen() {
               hint="Open in Excel or Google Sheets"
               icon="table-chart"
               busy={exporting === 'csv'}
-              onPress={() => doExport('csv')}
+              onPress={() => openExport('csv')}
               color={theme.text}
               secondary={theme.textSecondary}
             />
@@ -350,14 +419,34 @@ export default function SettingsScreen() {
               hint="A tidy printable statement"
               icon="picture-as-pdf"
               busy={exporting === 'pdf'}
-              onPress={() => doExport('pdf')}
+              onPress={() => openExport('pdf')}
+              color={theme.text}
+              secondary={theme.textSecondary}
+            />
+            <View style={[styles.divider, { backgroundColor: theme.backgroundSelected }]} />
+            <ExportRow
+              label="Create JSON backup"
+              hint="Save a restorable copy of your personal data"
+              icon="backup"
+              busy={backupBusy}
+              onPress={createBackup}
+              color={theme.text}
+              secondary={theme.textSecondary}
+            />
+            <View style={[styles.divider, { backgroundColor: theme.backgroundSelected }]} />
+            <ExportRow
+              label="Restore from backup"
+              hint="Review the file before importing"
+              icon="restore"
+              busy={restoreBusy}
+              onPress={chooseBackup}
               color={theme.text}
               secondary={theme.textSecondary}
             />
           </View>
 
           <View style={styles.brand}>
-            <Image source={LOGO} style={styles.brandLogo} contentFit="contain" />
+            <BrandMark style={styles.brandLogo} />
             <ThemedText type="smallBold" style={styles.brandName}>
               Spendly
             </ThemedText>
@@ -370,7 +459,75 @@ export default function SettingsScreen() {
           </View>
         </ScrollView>
       </SafeAreaView>
+
+      <ExportSheet
+        visible={sheetOpen}
+        format={sheetFormat}
+        onClose={() => setSheetOpen(false)}
+        onExport={(sections, period) => {
+          // Close first, then export on the next frame, so the share sheet
+          // isn't stranded behind the modal (same reason as ActionSheet).
+          setSheetOpen(false);
+          requestAnimationFrame(() => doExport(sheetFormat, sections, period));
+        }}
+      />
+
+      <Modal
+        visible={restoreCandidate !== null}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setRestoreCandidate(null)}>
+        <View style={styles.restoreBackdrop}>
+          <ThemedView type="background" style={styles.restoreCard}>
+            <ThemedText type="subtitle">Review backup</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary" numberOfLines={2}>
+              {restoreCandidate?.name}
+            </ThemedText>
+            {restoreCandidate && (
+              <ThemedText type="small" themeColor="textSecondary">
+                Created {new Date(restoreCandidate.backup.createdAt).toLocaleString()}
+              </ThemedText>
+            )}
+            {restoreSummary && (
+              <View style={styles.restoreCounts}>
+                <RestoreCount label="Expenses and income" count={restoreSummary.transactions} />
+                <RestoreCount label="Loan entries" count={restoreSummary.ledgerEntries} />
+                <RestoreCount label="Budgets" count={restoreSummary.budgets} />
+                <RestoreCount label="Categories" count={restoreSummary.categories} />
+                <RestoreCount label="People and display settings" count={restoreSummary.people} />
+              </View>
+            )}
+            <ThemedText type="small" themeColor="textSecondary">
+              Import adds records that aren’t here yet. Existing records are kept. Shared books and receipt photos aren’t copied; receipt links are kept only for the same account.
+            </ThemedText>
+            <View style={styles.restoreActions}>
+              <Pressable
+                onPress={() => setRestoreCandidate(null)}
+                style={({ pressed }) => [styles.restoreButton, { backgroundColor: theme.backgroundElement }, pressed && styles.pressed]}>
+                <ThemedText type="smallBold">Cancel</ThemedText>
+              </Pressable>
+              <Pressable
+                onPress={importBackup}
+                disabled={restoreBusy}
+                style={({ pressed }) => [styles.restoreButton, { backgroundColor: theme.accent }, restoreBusy && styles.disabled, pressed && styles.pressed]}>
+                {restoreBusy ? <ActivityIndicator color="#ffffff" /> : <ThemedText type="smallBold" style={styles.restoreLabel}>Import backup</ThemedText>}
+              </Pressable>
+            </View>
+          </ThemedView>
+        </View>
+      </Modal>
     </ThemedView>
+  );
+}
+
+function RestoreCount({ label, count }: { label: string; count: number }) {
+  const theme = useTheme();
+  return (
+    <View style={styles.restoreCount}>
+      <ThemedText type="small">{label}</ThemedText>
+      <ThemedText type="smallBold" style={{ color: theme.accent }}>{count}</ThemedText>
+    </View>
   );
 }
 
@@ -449,8 +606,9 @@ const styles = StyleSheet.create({
     paddingBottom: BottomTabInset + Spacing.six,
   },
   title: {
-    fontSize: 40,
-    lineHeight: 46,
+    fontSize: 32,
+    lineHeight: 38,
+    fontWeight: '700',
     marginBottom: Spacing.two,
   },
   failureCard: {
@@ -488,7 +646,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   card: {
-    borderRadius: 16,
+    borderRadius: 20,
     padding: Spacing.three,
     gap: Spacing.two,
   },
@@ -564,6 +722,48 @@ const styles = StyleSheet.create({
   },
   divider: {
     height: 1,
+  },
+  restoreBackdrop: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: Spacing.four,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  restoreCard: {
+    width: '100%',
+    maxWidth: 480,
+    borderRadius: 20,
+    padding: Spacing.four,
+    gap: Spacing.two,
+  },
+  restoreCounts: {
+    gap: Spacing.one,
+    paddingVertical: Spacing.two,
+  },
+  restoreCount: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  restoreActions: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+    marginTop: Spacing.one,
+  },
+  restoreButton: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.two,
+  },
+  restoreLabel: {
+    color: '#ffffff',
+  },
+  disabled: {
+    opacity: 0.55,
   },
   pressed: {
     opacity: 0.7,

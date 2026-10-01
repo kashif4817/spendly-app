@@ -51,6 +51,42 @@ export function formatRelativeDay(key: string): string {
   return formatFullDate(key);
 }
 
+/** Time of day for an ISO timestamp, e.g. "3:45 PM". */
+export function formatTime(iso: string): string {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
+/** A run of items that share a day, and what that day came to. */
+export type DayGroup<T> = {
+  day: string;
+  net: number;
+  data: T[];
+};
+
+/**
+ * One group per day, in the order the days first appear — so a list already
+ * sorted newest-first stays that way. `signed` gives each item's effect on the
+ * day's net: positive for money in, negative for money out.
+ */
+export function groupByDay<T extends { day: string }>(
+  items: T[],
+  signed: (item: T) => number
+): DayGroup<T>[] {
+  const groups = new Map<string, DayGroup<T>>();
+  for (const item of items) {
+    let group = groups.get(item.day);
+    if (!group) {
+      group = { day: item.day, net: 0, data: [] };
+      groups.set(item.day, group);
+    }
+    group.data.push(item);
+    group.net += signed(item);
+  }
+  return Array.from(groups.values());
+}
+
 /** First day key of the month containing `key`. */
 export function monthStart(key: string): string {
   const d = keyToDate(key);

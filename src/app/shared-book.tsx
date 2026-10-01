@@ -1,10 +1,20 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Stack, useLocalSearchParams, useRouter, type Href } from 'expo-router';
-import { useState } from 'react';
-import { FlatList, Pressable, Share, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  AppState,
+  Pressable,
+  RefreshControl,
+  SectionList,
+  Share,
+  StyleSheet,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ActionSheet } from '@/components/action-sheet';
+import { DayHeader } from '@/components/day-header';
 import { PromptModal } from '@/components/prompt-modal';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -26,7 +36,7 @@ import {
 } from '@/db';
 import { useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
-import { formatRelativeDay } from '@/lib/date';
+import { formatTime, groupByDay } from '@/lib/date';
 import { confirm, notify } from '@/lib/confirm';
 import { formatMoney } from '@/lib/money';
 import {
@@ -39,10 +49,25 @@ import { useSync } from '@/sync/provider';
 
 const SETTLED_EPSILON = 0.005;
 
+/**
+ * How long the balance waits on the server before the saved one is shown
+ * anyway. A flaky connection can hang a request for far longer than this, and
+ * a book that works offline shouldn't lock you out of it in the meantime.
+ */
+const REFRESH_TIMEOUT_MS = 12_000;
+
+/**
+ * How far the balance on screen can be trusted:
+ *   checking — a sync is running, so the balance may be about to change
+ *   current  — the sync finished; this is what the server has
+ *   saved    — the server couldn't be reached; this is the last saved copy
+ */
+type Freshness = 'checking' | 'current' | 'saved';
+
 export default function SharedBookScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { status } = useSync();
+  const { status, refreshNow } = useSync();
   const params = useLocalSearchParams<{ id?: string }>();
   const bookId = params.id ?? '';
 
@@ -57,8 +82,75 @@ export default function SharedBookScreen() {
    * reads as synced — which is why their entries already looked right.
    */
   const pending = useQuery(() => new Set(getPendingRowIds('shared_entries')));
+  const hasPendingChanges = entries.some((entry) => pending.has(entry.id));
 
   const flags = useQuery(() => getBookFlags(bookId), [bookId]);
+
+  // One section per day, netted from your side: what you paid in, what they
+  // paid out — the same sum the balance uses.
+  const days = useMemo(
+    () => groupByDay(entries, (e) => (e.payer_id === me ? e.amount : -e.amount)),
+    [entries, me]
+  );
+
+  /**
+   * The other member may have added entries while this phone was offline, and
+   * those only exist here once a sync has pulled them. Until then the balance
+   * is a guess, so the book opens by checking, and holds the balance and the
+   * buttons back until it knows.
+   */
+  const [freshness, setFreshness] = useState<Freshness>('checking');
+  // Whether the running check came from pull-to-refresh, which draws its own
+  // spinner at the top of the list.
+  const [pulled, setPulled] = useState(false);
+  const latestCheck = useRef(0);
+  const checking = freshness === 'checking';
+
+  const check = useCallback(async () => {
+    const run = ++latestCheck.current;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const gaveUp = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), REFRESH_TIMEOUT_MS);
+    });
+
+    const sync = refreshNow();
+    const ok = await Promise.race([sync, gaveUp]);
+    clearTimeout(timer);
+
+    // Only the newest check gets to say how fresh the screen is.
+    if (run !== latestCheck.current) return;
+    setFreshness(ok ? 'current' : 'saved');
+    setPulled(false);
+
+    // A slow sync can still land after we stopped waiting for it.
+    if (!ok) {
+      sync.then((late) => {
+        if (late && run === latestCheck.current) setFreshness('current');
+      });
+    }
+  }, [refreshNow]);
+
+  useEffect(() => {
+    void check();
+  }, [check]);
+
+  // Coming back to the app with the book already open is the same situation
+  // as opening it: whatever changed meanwhile hasn't been pulled yet.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      setFreshness('checking');
+      void check();
+    });
+    return () => sub.remove();
+  }, [check]);
+
+  const refresh = (fromPull = false) => {
+    if (checking) return;
+    setFreshness('checking');
+    setPulled(fromPull);
+    void check();
+  };
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -122,7 +214,7 @@ export default function SharedBookScreen() {
 
   /** Settle up: whoever is behind records a payment that zeroes the balance. */
   const settleUp = () => {
-    if (settled || !otherId) return;
+    if (settled || !otherId || checking) return;
     // If they owe you, the settling payment comes from them.
     addSharedEntry({
       bookId,
@@ -136,18 +228,56 @@ export default function SharedBookScreen() {
     return (
       <ThemedView style={styles.container}>
         <Stack.Screen options={{ title: 'Shared book' }} />
-        <View style={styles.missing}>
-          <ThemedText style={styles.emoji}>🗒️</ThemedText>
-          <ThemedText type="smallBold">Book not found</ThemedText>
-          <ThemedText type="small" themeColor="textSecondary" style={styles.center}>
-            It may have been left or removed.
-          </ThemedText>
-        </View>
+        {/* A book this phone hasn't pulled yet isn't missing — it's on its way. */}
+        {checking ? (
+          <View style={styles.missing}>
+            <ActivityIndicator size="large" color={theme.accent} />
+            <ThemedText type="small" themeColor="textSecondary">
+              Loading the book…
+            </ThemedText>
+          </View>
+        ) : (
+          <View style={styles.missing}>
+            <ThemedText type="smallBold">Book not found</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary" style={styles.center}>
+              It may have been left or removed.
+            </ThemedText>
+          </View>
+        )}
       </ThemedView>
     );
   }
 
   const waiting = !otherId;
+
+  const liveLabel = checking
+    ? 'Checking for shared updates…'
+    : hasPendingChanges
+      ? status === 'offline'
+        ? 'Saved here · waiting for a connection'
+        : status === 'syncing'
+          ? 'Sending your changes…'
+          : 'Changes waiting to sync'
+      : freshness === 'saved'
+        ? status === 'offline'
+          ? 'Offline · showing the saved book'
+          : 'Couldn’t update · showing the saved book'
+        : status === 'syncing'
+          ? 'Checking for shared updates…'
+          : status === 'offline'
+          ? 'Offline · showing the saved book'
+          : 'Up to date with the shared book';
+  const syncIcon: keyof typeof MaterialIcons.glyphMap = checking || status === 'syncing'
+    ? 'sync'
+    : hasPendingChanges
+      ? status === 'offline' ? 'cloud-off' : 'cloud-upload'
+      : freshness === 'saved' || status === 'offline'
+        ? 'cloud-off'
+        : 'cloud-done';
+  const syncColor =
+    freshness === 'current' && status !== 'offline' && !hasPendingChanges
+      ? theme.accent
+      : theme.textSecondary;
 
   return (
     <ThemedView style={styles.container}>
@@ -155,50 +285,80 @@ export default function SharedBookScreen() {
         options={{
           title: book.name || 'Shared book',
           headerRight: () => (
-            <Pressable
-              onPress={() => setMenuOpen(true)}
-              hitSlop={10}
-              accessibilityRole="button"
-              accessibilityLabel="Book options">
-              <MaterialIcons name="more-vert" size={22} color={theme.text} />
-            </Pressable>
+            <View style={styles.headerActions}>
+              <Pressable
+                onPress={() => refresh()}
+                disabled={checking}
+                hitSlop={10}
+                style={[styles.headerIcon, checking && styles.disabled]}
+                accessibilityRole="button"
+                accessibilityLabel="Refresh"
+                accessibilityState={{ disabled: checking, busy: checking }}>
+                <MaterialIcons name="refresh" size={22} color={theme.text} />
+              </Pressable>
+              <Pressable
+                onPress={() => setMenuOpen(true)}
+                hitSlop={10}
+                style={styles.headerIcon}
+                accessibilityRole="button"
+                accessibilityLabel="Book options">
+                <MaterialIcons name="more-vert" size={22} color={theme.text} />
+              </Pressable>
+            </View>
           ),
         }}
       />
       <SafeAreaView edges={['bottom']} style={styles.safeArea}>
-        <FlatList
-          data={entries}
+        <SectionList
+          sections={days}
           keyExtractor={(e) => e.id}
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
+          stickySectionHeadersEnabled={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={pulled && checking}
+              onRefresh={() => refresh(true)}
+              tintColor={theme.accent}
+              colors={[theme.accent]}
+            />
+          }
           ListHeaderComponent={
             <View style={styles.head}>
               <ThemedView type="backgroundElement" style={styles.balanceCard}>
                 <View style={styles.liveRow}>
-                  <View
-                    style={[
-                      styles.liveDot,
-                      { backgroundColor: status === 'offline' ? theme.textSecondary : theme.accent },
-                    ]}
-                  />
-                  <ThemedText type="small" themeColor="textSecondary">
-                    {status === 'offline' ? 'Offline · will sync' : 'Live · shared'}
+                  <MaterialIcons name={syncIcon} size={17} color={syncColor} />
+                  <ThemedText type="small" style={{ color: syncColor }}>
+                    {liveLabel}
                   </ThemedText>
                 </View>
-                <ThemedText type="small" themeColor="textSecondary">
-                  {settled
-                    ? 'All settled'
-                    : owesYou
-                      ? `${theirLabel} owes you`
-                      : `You owe ${theirLabel}`}
-                </ThemedText>
-                <ThemedText style={[styles.balance, { color: statusColor }]}>
-                  {formatMoney(Math.abs(balance))}
-                </ThemedText>
-                {/* The accounting term, same as a person's statement shows. */}
-                <ThemedText type="small" themeColor="textSecondary">
-                  {settled ? '' : owesYou ? 'Receivable' : 'Payable'}
-                </ThemedText>
+                {checking ? (
+                  // The saved balance may be about to change, so it isn't
+                  // shown at all rather than shown and then corrected.
+                  <View style={styles.balanceLoading}>
+                    <ActivityIndicator size="large" color={theme.accent} />
+                    <ThemedText type="small" themeColor="textSecondary">
+                      Getting the latest balance…
+                    </ThemedText>
+                  </View>
+                ) : (
+                  <>
+                    <ThemedText type="small" themeColor="textSecondary">
+                      {settled
+                        ? 'All settled'
+                        : owesYou
+                          ? `${theirLabel} owes you`
+                          : `You owe ${theirLabel}`}
+                    </ThemedText>
+                    <ThemedText style={[styles.balance, { color: statusColor }]}>
+                      {formatMoney(Math.abs(balance))}
+                    </ThemedText>
+                    {/* The accounting term, same as a person's statement shows. */}
+                    <ThemedText type="small" themeColor="textSecondary">
+                      {settled ? '' : owesYou ? 'Receivable' : 'Payable'}
+                    </ThemedText>
+                  </>
+                )}
               </ThemedView>
 
               {waiting && (
@@ -220,23 +380,27 @@ export default function SharedBookScreen() {
                 </Pressable>
               )}
 
+              {/* Held back while checking: an entry, and a settle-up above all,
+                  should be made against the real balance, not the saved one. */}
               <View style={styles.actions}>
                 <Pressable
                   onPress={() => add(me)}
+                  disabled={checking}
                   style={({ pressed }) => [
                     styles.actionBtn,
                     { backgroundColor: MoneyColors.in },
+                    checking && styles.disabled,
                     pressed && styles.pressed,
                   ]}>
                   <ThemedText style={styles.actionLabel}>＋ I paid</ThemedText>
                 </Pressable>
                 <Pressable
                   onPress={() => otherId && add(otherId)}
-                  disabled={!otherId}
+                  disabled={!otherId || checking}
                   style={({ pressed }) => [
                     styles.actionBtn,
                     { backgroundColor: MoneyColors.out },
-                    !otherId && styles.disabled,
+                    (!otherId || checking) && styles.disabled,
                     pressed && styles.pressed,
                   ]}>
                   <ThemedText style={styles.actionLabel}>
@@ -247,6 +411,7 @@ export default function SharedBookScreen() {
 
               {!settled && otherId && (
                 <Pressable
+                  disabled={checking}
                   onPress={() =>
                     confirm({
                       title: 'Settle up?',
@@ -257,7 +422,7 @@ export default function SharedBookScreen() {
                       onConfirm: settleUp,
                     })
                   }
-                  style={styles.settleBtn}
+                  style={[styles.settleBtn, checking && styles.disabled]}
                   hitSlop={8}>
                   <ThemedText type="smallBold">Settle up</ThemedText>
                 </Pressable>
@@ -268,6 +433,9 @@ export default function SharedBookScreen() {
               </ThemedText>
             </View>
           }
+          renderSectionHeader={({ section }) => (
+            <DayHeader day={section.day} net={section.net} first={section === days[0]} />
+          )}
           renderItem={({ item }) => (
             <EntryRow
               entry={item}
@@ -282,9 +450,13 @@ export default function SharedBookScreen() {
             />
           )}
           ListEmptyComponent={
-            <ThemedText type="small" themeColor="textSecondary" style={styles.empty}>
-              No entries yet. Use the buttons above to record who paid.
-            </ThemedText>
+            // Not "no entries" while the other phone's entries may still be on
+            // their way down.
+            checking ? null : (
+              <ThemedText type="small" themeColor="textSecondary" style={styles.empty}>
+                No entries yet. Use the buttons above to record who paid.
+              </ThemedText>
+            )
           }
         />
       </SafeAreaView>
@@ -387,7 +559,8 @@ function EntryRow({
           />
         </View>
         <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-          {entry.note?.trim() || formatRelativeDay(entry.day)}
+          {/* The day is in the divider above, so an empty note shows the time. */}
+          {entry.note?.trim() || formatTime(entry.created_at)}
         </ThemedText>
       </View>
       <ThemedText type="smallBold" style={{ color }}>
@@ -415,7 +588,7 @@ const styles = StyleSheet.create({
     gap: Spacing.three,
   },
   balanceCard: {
-    borderRadius: Spacing.four,
+    borderRadius: 20,
     padding: Spacing.four,
     gap: Spacing.half,
     alignItems: 'center',
@@ -425,6 +598,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.one,
     marginBottom: Spacing.one,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+  },
+  headerIcon: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  balanceLoading: {
+    // Roughly the height of the balance it stands in for, so the card
+    // doesn't jump when the number arrives.
+    minHeight: 94,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.two,
   },
   liveDot: {
     width: 7,
@@ -511,3 +703,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
+

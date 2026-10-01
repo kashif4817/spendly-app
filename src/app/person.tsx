@@ -1,10 +1,11 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Stack, useLocalSearchParams, useRouter, type Href } from 'expo-router';
-import { useState } from 'react';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { Pressable, SectionList, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ActionSheet } from '@/components/action-sheet';
+import { DayHeader } from '@/components/day-header';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
@@ -19,7 +20,7 @@ import {
 } from '@/db';
 import { useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
-import { formatRelativeDay } from '@/lib/date';
+import { formatTime, groupByDay } from '@/lib/date';
 import { confirm } from '@/lib/confirm';
 import { formatMoney } from '@/lib/money';
 
@@ -33,6 +34,12 @@ export default function PersonScreen() {
   const balance = useQuery(() => getPersonBalance(person), [person]);
   const flags = useQuery(() => getPersonFlags(person), [person]);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // One section per day, netted the same way as the balance: gave in, took out.
+  const days = useMemo(
+    () => groupByDay(entries, (e) => (e.direction === 'gave' ? e.amount : -e.amount)),
+    [entries]
+  );
 
   const settled = Math.abs(balance) < 0.005;
   const owesYou = balance > 0;
@@ -68,11 +75,12 @@ export default function PersonScreen() {
         }}
       />
       <SafeAreaView edges={['bottom']} style={styles.safeArea}>
-        <FlatList
-          data={entries}
+        <SectionList
+          sections={days}
           keyExtractor={(e) => e.id}
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
+          stickySectionHeadersEnabled={false}
           ListHeaderComponent={
             <View style={styles.head}>
               <ThemedView type="backgroundElement" style={styles.balanceCard}>
@@ -130,6 +138,9 @@ export default function PersonScreen() {
               </ThemedText>
             </View>
           }
+          renderSectionHeader={({ section }) => (
+            <DayHeader day={section.day} net={section.net} first={section === days[0]} showNet={false} />
+          )}
           renderItem={({ item }) => {
             const gave = item.direction === 'gave';
             const color = gave ? MoneyColors.in : MoneyColors.out;
@@ -140,7 +151,8 @@ export default function PersonScreen() {
                 <View style={styles.entryMiddle}>
                   <ThemedText type="smallBold">{gave ? 'You gave' : 'You took'}</ThemedText>
                   <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-                    {item.note?.trim() || formatRelativeDay(item.day)}
+                    {/* The day is in the divider above, so an empty note shows the time. */}
+                    {item.note?.trim() || formatTime(item.created_at)}
                   </ThemedText>
                 </View>
                 <ThemedText type="smallBold" style={{ color }}>
@@ -196,7 +208,7 @@ const styles = StyleSheet.create({
     gap: Spacing.three,
   },
   balanceCard: {
-    borderRadius: Spacing.four,
+    borderRadius: 20,
     padding: Spacing.four,
     gap: Spacing.half,
     alignItems: 'center',
@@ -249,3 +261,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
+

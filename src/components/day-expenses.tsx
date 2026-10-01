@@ -71,6 +71,7 @@ export function DayExpenses({ day, entries, onPressEntry }: Props) {
                 transaction={tx}
                 emoji={emojiFor(tx.category, tx.type)}
                 showTime
+                inset
                 onPress={onPressEntry ? () => onPressEntry(tx.id) : undefined}
               />
             ))}
@@ -87,16 +88,16 @@ export function DayExpenses({ day, entries, onPressEntry }: Props) {
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: Spacing.four,
-    padding: Spacing.four,
+    borderRadius: 20,
+    padding: Spacing.three,
   },
   header: {
     gap: Spacing.half,
   },
   total: {
-    fontSize: 34,
+    fontSize: 26,
     fontWeight: '700',
-    lineHeight: 40,
+    lineHeight: 32,
   },
   meta: {
     flexDirection: 'row',

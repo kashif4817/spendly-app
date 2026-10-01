@@ -151,7 +151,7 @@ export function MonthCalendar({ month, selected, totals, onSelect, onChangeMonth
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: Spacing.four,
+    borderRadius: 20,
     padding: Spacing.three,
     gap: Spacing.two,
   },

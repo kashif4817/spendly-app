@@ -3,7 +3,6 @@ import { Image } from 'expo-image';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Modal,
@@ -16,10 +15,20 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import {
+  AmountField,
+  DateStepper,
+  FormCard,
+  FormInput,
+  FormLink,
+  FormLinks,
+  FormRow,
+  PrimaryButton,
+} from '@/components/form';
 import { Segmented } from '@/components/segmented';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { CURRENCY, MoneyColors } from '@/constants/app';
+import { MoneyColors } from '@/constants/app';
 import { CATEGORY_EMOJIS } from '@/constants/categories';
 import { Spacing } from '@/constants/theme';
 import {
@@ -29,6 +38,7 @@ import {
   getCategories,
   getCurrentUserId,
   getTransaction,
+  restoreTransaction,
   renameCategory,
   setTransactionReceipt,
   updateCategoryEmoji,
@@ -38,8 +48,9 @@ import {
 } from '@/db';
 import { useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
-import { addDays, formatRelativeDay, todayKey } from '@/lib/date';
+import { todayKey } from '@/lib/date';
 import { parseAmount } from '@/lib/money';
+import { offerUndo } from '@/lib/undo';
 import {
   captureWithCamera,
   compressReceipt,
@@ -57,13 +68,17 @@ const NEW_CAT_EMOJI = '🏷️';
 export default function EntryScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const params = useLocalSearchParams<{ id?: string; day?: string }>();
+  const params = useLocalSearchParams<{ id?: string; day?: string; type?: string }>();
   const editId = params.id ?? null;
 
   // Load the existing entry once when editing.
   const existing = useMemo(() => (editId ? getTransaction(editId) : null), [editId]);
 
-  const [type, setType] = useState<EntryType>(existing?.type ?? 'out');
+  // A new entry starts as an expense unless the caller asked for income (the
+  // dashboard's "Income" shortcut); editing keeps the entry's own type.
+  const [type, setType] = useState<EntryType>(
+    existing?.type ?? (params.type === 'in' ? 'in' : 'out')
+  );
   const [amount, setAmount] = useState(existing ? String(existing.amount) : '');
   const [category, setCategory] = useState(existing?.category ?? '');
   const [note, setNote] = useState(existing?.note ?? '');
@@ -203,21 +218,13 @@ export default function EntryScreen() {
     }
   }
 
-  async function removeReceipt() {
+  function removeReceipt() {
     if (pending) {
       setPending(null);
       return;
     }
-    if (receiptPath && editId) {
-      const path = receiptPath;
-      setReceiptPath(null);
-      try {
-        await deleteReceipt(path);
-        setTransactionReceipt(editId, null);
-      } catch {
-        // best-effort; the row is already unlinked locally
-      }
-    }
+    // Keep the old cloud file until the edit is saved so Undo can relink it.
+    setReceiptPath(null);
   }
 
   async function onSave() {
@@ -233,7 +240,9 @@ export default function EntryScreen() {
 
     const payload = { type, amount: value, category, note: note.trim(), day };
     setSaving(true);
+    const before = existing;
     let id = editId;
+    let savedReceiptPath: string | null = null;
     try {
       if (editId) updateTransaction(editId, payload);
       else id = addTransaction(payload);
@@ -242,7 +251,12 @@ export default function EntryScreen() {
         const userId = getCurrentUserId();
         if (userId) {
           try {
-            setTransactionReceipt(id, await uploadReceipt(userId, id, pending));
+            savedReceiptPath = await uploadReceipt(
+              userId,
+              editId ? `${id}-${Date.now()}` : id,
+              pending
+            );
+            setTransactionReceipt(id, savedReceiptPath);
           } catch (e) {
             const quota = e instanceof ReceiptError && e.code === 'quota';
             Alert.alert(
@@ -254,8 +268,32 @@ export default function EntryScreen() {
           }
         }
       }
+
+      if (editId && before && !pending && receiptPath !== before.receipt_path) {
+        setTransactionReceipt(editId, receiptPath);
+      }
     } finally {
       setSaving(false);
+    }
+    if (editId && before) {
+      const afterReceiptPath = savedReceiptPath ?? (pending ? before.receipt_path : receiptPath);
+      offerUndo('Entry updated', () => {
+        updateTransaction(editId, {
+          type: before.type,
+          amount: before.amount,
+          category: before.category,
+          note: before.note,
+          day: before.day,
+        });
+        setTransactionReceipt(editId, before.receipt_path);
+        if (afterReceiptPath && afterReceiptPath !== before.receipt_path) {
+          void deleteReceipt(afterReceiptPath).catch(() => {});
+        }
+      }, 8000, () => {
+        if (before.receipt_path && before.receipt_path !== afterReceiptPath) {
+          return deleteReceipt(before.receipt_path);
+        }
+      });
     }
     router.back();
   }
@@ -273,25 +311,33 @@ export default function EntryScreen() {
 
   function onDelete() {
     if (!editId) return;
-    Alert.alert('Delete entry', 'This entry will be permanently removed.', [
+    Alert.alert('Delete entry', 'This removes the entry. You can undo for a few seconds.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
         style: 'destructive',
         onPress: () => {
-          if (receiptPath) deleteReceipt(receiptPath).catch(() => {});
+          const removed = existing ?? getTransaction(editId);
+          if (!removed) return;
           deleteTransaction(editId);
+          offerUndo(
+            'Entry deleted',
+            () => restoreTransaction(removed),
+            8000,
+            () => removed.receipt_path ? deleteReceipt(removed.receipt_path) : undefined
+          );
           router.back();
         },
       },
     ]);
   }
 
-  const isToday = day === todayKey();
+  const isIncome = type === 'in';
+  const title = `${editId ? 'Edit' : 'Add'} ${isIncome ? 'income' : 'expense'}`;
 
   return (
     <ThemedView style={styles.container}>
-      <Stack.Screen options={{ title: editId ? 'Edit entry' : 'Add entry' }} />
+      <Stack.Screen options={{ title }} />
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -299,148 +345,86 @@ export default function EntryScreen() {
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}>
-          {/* In / Out */}
           <Segmented
             value={type}
             onChange={chooseType}
             options={[
-              { label: 'Money out', value: 'out', color: MoneyColors.out },
-              { label: 'Money in', value: 'in', color: MoneyColors.in },
+              { label: 'Expense', value: 'out', color: MoneyColors.out },
+              { label: 'Income', value: 'in', color: MoneyColors.in },
             ]}
           />
 
-          {/* Amount */}
-          <View style={[styles.amountRow, { backgroundColor: theme.backgroundElement }]}>
-            <ThemedText style={[styles.currency, { color: accent }]}>{CURRENCY}</ThemedText>
-            <TextInput
-              value={amount}
-              onChangeText={setAmount}
-              placeholder="0"
-              placeholderTextColor={theme.textSecondary}
-              keyboardType="decimal-pad"
-              style={[styles.amountInput, { color: theme.text }]}
-              autoFocus={!editId}
-            />
-          </View>
+          <AmountField value={amount} onChangeText={setAmount} color={accent} autoFocus={!editId} />
 
-          {/* Category */}
-          <ThemedText type="smallBold" style={styles.label}>
-            Category
-          </ThemedText>
-          <Pressable
-            onPress={() => setCatMenuOpen(true)}
-            style={[styles.selectField, { backgroundColor: theme.backgroundElement }]}>
-            {selectedCat ? (
-              <View style={styles.selectValue}>
-                <ThemedText style={styles.chipEmoji}>{selectedCat.emoji}</ThemedText>
-                <ThemedText style={{ color: theme.text }}>{selectedCat.name}</ThemedText>
-              </View>
-            ) : (
-              <ThemedText themeColor="textSecondary">Select a category</ThemedText>
-            )}
-            <MaterialIcons name="expand-more" size={24} color={theme.textSecondary} />
-          </Pressable>
+          <FormCard>
+            <FormRow icon="category" label="Category" onPress={() => setCatMenuOpen(true)} chevron>
+              {selectedCat ? (
+                <View style={styles.selectValue}>
+                  <ThemedText style={styles.chipEmoji}>{selectedCat.emoji}</ThemedText>
+                  <ThemedText type="smallBold">{selectedCat.name}</ThemedText>
+                </View>
+              ) : (
+                <ThemedText themeColor="textSecondary">Choose a category</ThemedText>
+              )}
+            </FormRow>
 
-          {/* Note */}
-          <ThemedText type="smallBold" style={styles.label}>
-            Note (optional)
-          </ThemedText>
-          <TextInput
-            value={note}
-            onChangeText={setNote}
-            placeholder="e.g. Lunch with team"
-            placeholderTextColor={theme.textSecondary}
-            style={[styles.noteInput, { backgroundColor: theme.backgroundElement, color: theme.text }]}
-          />
+            <FormRow icon="notes" label="Note (optional)">
+              <FormInput
+                value={note}
+                onChangeText={setNote}
+                placeholder={isIncome ? 'e.g. June salary' : 'e.g. Lunch with team'}
+              />
+            </FormRow>
 
-          {/* Receipt */}
-          <ThemedText type="smallBold" style={styles.label}>
-            Receipt (optional)
-          </ThemedText>
-          {previewUri ? (
-            <View style={[styles.receiptRow, { backgroundColor: theme.backgroundElement }]}>
-              <Pressable onPress={() => setViewerOpen(true)}>
-                <Image source={{ uri: previewUri }} style={styles.thumb} contentFit="cover" />
-              </Pressable>
-              <View style={styles.receiptInfo}>
-                <ThemedText type="small" themeColor="textSecondary">
-                  {pending ? 'New photo — uploads when you save' : 'Tap to view'}
-                </ThemedText>
-                <Pressable onPress={removeReceipt} hitSlop={8}>
-                  <ThemedText type="smallBold" style={{ color: MoneyColors.out }}>
-                    Remove
-                  </ThemedText>
-                </Pressable>
-              </View>
-            </View>
-          ) : (
-            <Pressable
-              onPress={attach}
-              style={[styles.attachBtn, { borderColor: theme.backgroundSelected }]}>
-              <MaterialIcons name="add-a-photo" size={20} color={theme.textSecondary} />
-              <ThemedText type="small" themeColor="textSecondary">
-                Attach a photo
-              </ThemedText>
-            </Pressable>
-          )}
+            <FormRow icon="event" label="Date">
+              <DateStepper day={day} onChange={setDay} color={accent} />
+            </FormRow>
 
-          {/* Date */}
-          <ThemedText type="smallBold" style={styles.label}>
-            Date
-          </ThemedText>
-          <View style={[styles.dateRow, { backgroundColor: theme.backgroundElement }]}>
-            <Pressable onPress={() => setDay(addDays(day, -1))} hitSlop={8} style={styles.stepper}>
-              <ThemedText style={styles.stepperText}>‹</ThemedText>
-            </Pressable>
-            <View style={styles.dateMiddle}>
-              <ThemedText type="smallBold">{formatRelativeDay(day)}</ThemedText>
-              {!isToday && (
-                <Pressable onPress={() => setDay(todayKey())} hitSlop={6}>
-                  <ThemedText type="small" style={{ color: accent }}>
-                    Jump to today
+            <FormRow icon="receipt-long" label="Receipt (optional)">
+              {previewUri ? (
+                <View style={styles.receiptRow}>
+                  <Pressable onPress={() => setViewerOpen(true)}>
+                    <Image source={{ uri: previewUri }} style={styles.thumb} contentFit="cover" />
+                  </Pressable>
+                  <View style={styles.receiptInfo}>
+                    <ThemedText type="small" themeColor="textSecondary">
+                      {pending ? 'Uploads when you save' : 'Tap the photo to view'}
+                    </ThemedText>
+                    <Pressable onPress={removeReceipt} hitSlop={8}>
+                      <ThemedText type="smallBold" style={{ color: MoneyColors.out }}>
+                        Remove
+                      </ThemedText>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : (
+                <Pressable onPress={attach} hitSlop={6} style={styles.attach}>
+                  <MaterialIcons name="add-a-photo" size={18} color={theme.accent} />
+                  <ThemedText type="smallBold" style={{ color: theme.accent }}>
+                    Attach a photo
                   </ThemedText>
                 </Pressable>
               )}
-            </View>
-            <Pressable
-              onPress={() => !isToday && setDay(addDays(day, 1))}
-              hitSlop={8}
-              style={styles.stepper}>
-              <ThemedText style={[styles.stepperText, isToday && { opacity: 0.3 }]}>›</ThemedText>
-            </Pressable>
-          </View>
+            </FormRow>
+          </FormCard>
 
-          {/* Save */}
-          <Pressable
+          <PrimaryButton
+            label={editId ? 'Save changes' : title}
             onPress={onSave}
-            disabled={saving}
-            style={({ pressed }) => [
-              styles.saveButton,
-              { backgroundColor: accent },
-              pressed && { opacity: 0.85 },
-            ]}>
-            {saving ? (
-              <ActivityIndicator color="#ffffff" />
-            ) : (
-              <ThemedText style={styles.saveText}>
-                {editId ? 'Save changes' : 'Add entry'}
-              </ThemedText>
-            )}
-          </Pressable>
+            color={accent}
+            busy={saving}
+          />
 
           {editId && (
-            <>
-              <Pressable onPress={onDuplicate} style={styles.duplicateButton} hitSlop={8}>
-                <ThemedText type="smallBold" style={{ color: accent }}>
-                  Duplicate for today
-                </ThemedText>
-              </Pressable>
-              <Pressable onPress={onDelete} style={styles.deleteButton} hitSlop={8}>
-                <ThemedText type="smallBold" style={{ color: MoneyColors.out }}>
-                  Delete entry
-                </ThemedText>
-              </Pressable>
-            </>
+            <FormLinks>
+              <FormLink
+                label="Duplicate for today"
+                icon="content-copy"
+                color={theme.accent}
+                onPress={onDuplicate}
+              />
+              <FormLink label="Delete" icon="delete-outline" color={MoneyColors.out} onPress={onDelete} />
+            </FormLinks>
           )}
 
           <SafeAreaView edges={['bottom']} />
@@ -661,38 +645,8 @@ const styles = StyleSheet.create({
     padding: Spacing.four,
     gap: Spacing.three,
   },
-  amountRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: Spacing.three,
-    paddingHorizontal: Spacing.four,
-    paddingVertical: Spacing.two,
-    gap: Spacing.two,
-  },
-  currency: {
-    fontSize: 32,
-    fontWeight: '700',
-  },
-  amountInput: {
-    flex: 1,
-    fontSize: 40,
-    fontWeight: '700',
-    paddingVertical: Spacing.two,
-  },
-  label: {
-    marginTop: Spacing.one,
-  },
   chipEmoji: {
     fontSize: 18,
-  },
-  selectField: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderRadius: Spacing.three,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.three,
-    minHeight: 52,
   },
   selectValue: {
     flexDirection: 'row',
@@ -829,81 +783,27 @@ const styles = StyleSheet.create({
     fontSize: 16,
     paddingVertical: Spacing.two,
   },
-  noteInput: {
-    borderRadius: Spacing.three,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.three,
-    fontSize: 16,
-  },
   receiptRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.three,
-    borderRadius: Spacing.three,
-    padding: Spacing.two,
+    marginTop: Spacing.one,
+  },
+  attach: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    paddingVertical: 2,
   },
   thumb: {
-    width: 64,
-    height: 64,
+    width: 56,
+    height: 56,
     borderRadius: 10,
     backgroundColor: '#00000010',
   },
   receiptInfo: {
     flex: 1,
     gap: Spacing.one,
-  },
-  attachBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.two,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderRadius: Spacing.three,
-    paddingVertical: Spacing.three,
-  },
-  dateRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: Spacing.three,
-    paddingHorizontal: Spacing.two,
-  },
-  stepper: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stepperText: {
-    fontSize: 28,
-    fontWeight: '600',
-  },
-  dateMiddle: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 1,
-    paddingVertical: Spacing.three,
-  },
-  saveButton: {
-    marginTop: Spacing.three,
-    borderRadius: Spacing.three,
-    paddingVertical: Spacing.three,
-    alignItems: 'center',
-    minHeight: 52,
-    justifyContent: 'center',
-  },
-  saveText: {
-    color: '#ffffff',
-    fontSize: 17,
-    fontWeight: '700',
-  },
-  duplicateButton: {
-    alignItems: 'center',
-    paddingVertical: Spacing.two,
-  },
-  deleteButton: {
-    alignItems: 'center',
-    paddingVertical: Spacing.two,
   },
   viewerBackdrop: {
     flex: 1,

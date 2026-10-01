@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
-import { Spacing } from '@/constants/theme';
+import { BottomTabInset, Spacing } from '@/constants/theme';
 
 /**
  * Floating banner offering an over-the-air update once one has downloaded.
@@ -53,7 +53,13 @@ export function UpdatePrompt() {
 
   return (
     <View
-      style={[styles.banner, { backgroundColor: theme.accent, top: insets.top + Spacing.two }]}>
+      style={[
+        styles.banner,
+        {
+          backgroundColor: theme.accent,
+          bottom: insets.bottom + BottomTabInset + Spacing.five + Spacing.two,
+        },
+      ]}>
       <View style={styles.left}>
         <MaterialIcons name="system-update" size={20} color="#ffffff" />
         <View style={styles.copy}>

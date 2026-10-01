@@ -2,8 +2,8 @@ import { CURRENCY } from '@/constants/app';
 
 /**
  * Format a number as a currency string. Whole amounts drop the decimals
- * (e.g. 1250 -> "Rs 1,250"), paisa are shown only when present
- * (e.g. 1250.5 -> "Rs 1,250.50").
+ * (e.g. 1250 -> "PKR 1,250"), paisa are shown only when present
+ * (e.g. 1250.5 -> "PKR 1,250.50").
  */
 export function formatMoney(amount: number): string {
   const rounded = Math.round((amount + Number.EPSILON) * 100) / 100;

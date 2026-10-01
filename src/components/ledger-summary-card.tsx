@@ -62,7 +62,7 @@ export function LedgerSummaryCard({ totals }: { totals: LedgerTotals }) {
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: Spacing.four,
+    borderRadius: 20,
     padding: Spacing.four,
     gap: Spacing.half,
   },

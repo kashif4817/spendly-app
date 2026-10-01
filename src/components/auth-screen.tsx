@@ -1,8 +1,8 @@
-import { Image } from 'expo-image';
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { BrandMark } from '@/components/brand-mark';
 import { GoogleGlyph } from '@/components/google-glyph';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -11,7 +11,6 @@ import { useTheme } from '@/hooks/use-theme';
 import { GOOGLE_CANCELLED } from '@/lib/google';
 import { useSync } from '@/sync/provider';
 
-const LOGO = require('../../assets/images/spendly-logo.png');
 const MAX_WIDTH = 420;
 /** The signed-out screen: brand + a single "Continue with Google" button. */
 export function AuthScreen() {
@@ -50,7 +49,7 @@ export function AuthScreen() {
         <View style={styles.card}>
           {/* Brand */}
           <View style={styles.brand}>
-            <Image source={LOGO} style={styles.logo} contentFit="contain" />
+            <BrandMark style={styles.logo} />
             <ThemedText type="title" style={styles.wordmark}>
               Spendly
             </ThemedText>

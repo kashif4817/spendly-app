@@ -6,6 +6,7 @@ import { MoneyColors } from '@/constants/app';
 import { Spacing } from '@/constants/theme';
 import type { Transaction } from '@/db';
 import { useTheme } from '@/hooks/use-theme';
+import { formatRelativeDay, formatTime } from '@/lib/date';
 import { formatSigned } from '@/lib/money';
 
 type Props = {
@@ -14,25 +15,45 @@ type Props = {
   onPress?: () => void;
   /** Show the time of day instead of the category as the subtitle. */
   showTime?: boolean;
+  /** Show the transaction day and time (for a cross-day recent-activity list). */
+  showDateAndTime?: boolean;
+  /**
+   * The row already sits inside a card, so draw it flat. Otherwise each row is
+   * its own small card on the page background.
+   */
+  inset?: boolean;
 };
 
-export function TransactionRow({ transaction, emoji, onPress, showTime }: Props) {
+export function TransactionRow({
+  transaction,
+  emoji,
+  onPress,
+  showTime,
+  showDateAndTime,
+  inset,
+}: Props) {
   const theme = useTheme();
   const isIn = transaction.type === 'in';
   const color = isIn ? MoneyColors.in : MoneyColors.out;
 
-  const subtitle = transaction.note?.trim()
-    ? transaction.note.trim()
-    : showTime
-      ? timeOf(transaction.created_at)
-      : transaction.category;
+  const subtitle = showDateAndTime
+    ? `${formatRelativeDay(transaction.day)} · ${formatTime(transaction.created_at)}`
+    : transaction.note?.trim()
+      ? transaction.note.trim()
+      : showTime
+        ? formatTime(transaction.created_at)
+        : transaction.category;
 
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}
+      style={({ pressed }) => [
+        styles.row,
+        !inset && [styles.card, { backgroundColor: theme.backgroundElement }],
+        pressed && { opacity: 0.6 },
+      ]}
       accessibilityRole="button">
-      <View style={[styles.iconWrap, { backgroundColor: theme.backgroundSelected }]}>
+      <View style={[styles.iconWrap, { backgroundColor: theme.background }]}>
         <ThemedText style={styles.emoji}>{emoji}</ThemedText>
       </View>
 
@@ -57,11 +78,6 @@ export function TransactionRow({ transaction, emoji, onPress, showTime }: Props)
   );
 }
 
-function timeOf(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-}
-
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
@@ -69,10 +85,16 @@ const styles = StyleSheet.create({
     gap: Spacing.three,
     paddingVertical: Spacing.two,
   },
+  card: {
+    borderRadius: 16,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: 10,
+    marginBottom: 6,
+  },
   iconWrap: {
     width: 40,
     height: 40,
-    borderRadius: 999,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
