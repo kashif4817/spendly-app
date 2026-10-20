@@ -15,7 +15,7 @@ import {
 import { Segmented } from '@/components/segmented';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { getCurrentUserId } from '@/db';
 import { useTheme } from '@/hooks/use-theme';
 import { createSharedBook, joinSharedBook, SharedBookError } from '@/sync/shared';
@@ -73,7 +73,9 @@ export default function SharedNewScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <View style={styles.intro}>
-            <ThemedText style={styles.emoji}>🤝</ThemedText>
+            <View style={[styles.introIcon, theme.glassWeak]}>
+              <MaterialIcons name="menu-book" size={26} color={theme.accentTint} />
+            </View>
             <ThemedText type="subtitle" style={styles.introTitle}>
               One ledger, two people
             </ThemedText>
@@ -108,7 +110,7 @@ export default function SharedNewScreen() {
                 onSubmitEditing={go}
                 style={[
                   styles.input,
-                  { backgroundColor: theme.backgroundElement, color: theme.text },
+                  theme.glassInput, { color: theme.text },
                 ]}
               />
               <ThemedText type="small" themeColor="textSecondary">
@@ -132,7 +134,7 @@ export default function SharedNewScreen() {
                 style={[
                   styles.input,
                   styles.codeInput,
-                  { backgroundColor: theme.backgroundElement, color: theme.text },
+                  theme.glassInput, { color: theme.text },
                 ]}
               />
               <ThemedText type="small" themeColor="textSecondary">
@@ -142,7 +144,7 @@ export default function SharedNewScreen() {
           )}
 
           {error && (
-            <View style={[styles.errorBox, { backgroundColor: theme.backgroundElement }]}>
+            <View style={[styles.errorBox, theme.glass]}>
               <MaterialIcons name="error-outline" size={18} color={DANGER} />
               <ThemedText type="small" style={styles.errorText}>
                 {error}
@@ -195,8 +197,13 @@ const styles = StyleSheet.create({
     gap: Spacing.one,
     paddingTop: Spacing.two,
   },
-  emoji: {
-    fontSize: 44,
+  introIcon: {
+    width: 60,
+    height: 60,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.two,
   },
   introTitle: {
     marginTop: Spacing.one,
@@ -208,7 +215,7 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   input: {
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.three,
     fontSize: 16,
@@ -225,7 +232,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     padding: Spacing.three,
   },
   errorText: {
@@ -233,7 +240,7 @@ const styles = StyleSheet.create({
     color: DANGER,
   },
   submit: {
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     paddingVertical: Spacing.three,
     alignItems: 'center',
     justifyContent: 'center',

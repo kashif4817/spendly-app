@@ -7,7 +7,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { PinPad } from '@/components/pin-pad';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Spacing } from '@/constants/theme';
+import { Radius, Spacing } from '@/constants/theme';
 import { useLock } from '@/lock/provider';
 
 const DANGER = '#e5484d';
@@ -156,7 +156,7 @@ const styles = StyleSheet.create({
   badge: {
     width: 64,
     height: 64,
-    borderRadius: 20,
+    borderRadius: Radius.card,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: Spacing.two,
@@ -189,7 +189,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: Spacing.two,
     backgroundColor: '#ffffff',
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     paddingVertical: Spacing.three,
     paddingHorizontal: Spacing.five,
     minHeight: 54,

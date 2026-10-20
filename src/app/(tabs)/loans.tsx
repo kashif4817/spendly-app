@@ -6,11 +6,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { AddButton } from '@/components/add-button';
+import { GlassChip } from '@/components/glass';
 import { PromptModal } from '@/components/prompt-modal';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { BottomTabInset, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
   combineLedgerTotals,
   createPerson,
@@ -416,28 +417,28 @@ export default function PeopleScreen() {
                   onPress={() => router.push('/shared-new' as Href)}
                   style={({ pressed }) => [
                     styles.addPerson,
-                    { backgroundColor: theme.backgroundElement },
+                    theme.glass,
                     pressed && styles.pressed,
                   ]}
                   accessibilityRole="button"
                   accessibilityLabel="Create or join a shared book">
-                  <MaterialIcons name="groups" size={22} color={theme.accent} />
+                  <MaterialIcons name="menu-book" size={21} color={theme.accentTint} />
                 </Pressable>
                 <Pressable
                   onPress={() => setAddOpen(true)}
                   style={({ pressed }) => [
                     styles.addPerson,
-                    { backgroundColor: theme.backgroundElement },
+                    theme.glass,
                     pressed && styles.pressed,
                   ]}
                   accessibilityRole="button"
                   accessibilityLabel="Add a person">
-                  <MaterialIcons name="person-add-alt" size={22} color={theme.accent} />
+                  <MaterialIcons name="person-add" size={21} color={theme.accentTint} />
                 </Pressable>
               </View>
 
               <View style={styles.tiles}>
-                <View style={[styles.tile, { backgroundColor: theme.backgroundElement }]}>
+                <View style={[styles.tile, theme.glass]}>
                   <ThemedText type="small" themeColor="textSecondary">
                     {filter === 'archived' ? 'Archived · you’ll get' : 'You’ll get'}
                   </ThemedText>
@@ -445,7 +446,7 @@ export default function PeopleScreen() {
                     {formatMoney(shownTotals.receivable)}
                   </ThemedText>
                 </View>
-                <View style={[styles.tile, { backgroundColor: theme.backgroundElement }]}>
+                <View style={[styles.tile, theme.glass]}>
                   <ThemedText type="small" themeColor="textSecondary">
                     {filter === 'archived' ? 'Archived · you’ll pay' : 'You’ll pay'}
                   </ThemedText>
@@ -456,7 +457,7 @@ export default function PeopleScreen() {
               </View>
 
               <View style={styles.searchRow}>
-                <View style={[styles.searchBar, { backgroundColor: theme.backgroundElement }]}>
+                <View style={[styles.searchBar, theme.glass]}>
                   <MaterialIcons name="search" size={20} color={theme.textSecondary} />
                   <TextInput
                     value={search}
@@ -484,7 +485,7 @@ export default function PeopleScreen() {
                   )}
                 </View>
 
-                <View style={[styles.viewSwitch, { backgroundColor: theme.backgroundElement }]}>
+                <View style={[styles.viewSwitch, theme.glass]}>
                   {VIEWS.map(({ key, icon, label }) => {
                     const selected = key === view;
                     return (
@@ -514,30 +515,17 @@ export default function PeopleScreen() {
                 showsHorizontalScrollIndicator={false}
                 style={styles.chipRow}
                 contentContainerStyle={styles.chips}>
-                {FILTERS.map(({ key, label }) => {
-                  const selected = key === filter;
-                  const color = selected ? '#ffffff' : theme.textSecondary;
-                  return (
-                    <Pressable
-                      key={key}
-                      onPress={() => setFilter(key)}
-                      style={[
-                        styles.chip,
-                        {
-                          backgroundColor: selected ? theme.accent : theme.backgroundElement,
-                        },
-                      ]}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected }}>
-                      {/* Archived is a separate shelf rather than a slice of
-                          balances, so it gets an icon to set it apart. */}
-                      {key === 'archived' && <MaterialIcons name="archive" size={14} color={color} />}
-                      <ThemedText type="smallBold" style={{ color }}>
-                        {label} {counts[key]}
-                      </ThemedText>
-                    </Pressable>
-                  );
-                })}
+                {FILTERS.map(({ key, label }) => (
+                  <GlassChip
+                    key={key}
+                    // Archived is a separate shelf rather than a slice of
+                    // balances, so it gets an icon to set it apart.
+                    icon={key === 'archived' ? 'archive' : undefined}
+                    label={`${label} ${counts[key]}`}
+                    selected={key === filter}
+                    onPress={() => setFilter(key)}
+                  />
+                ))}
               </ScrollView>
 
               {query.length > 0 && (
@@ -629,13 +617,56 @@ export default function PeopleScreen() {
   );
 }
 
-/** Marks a row as a book both people can see and write to. */
-function SharedBadge() {
+/**
+ * The round initial, with a small badge on the corner when the row is a book
+ * both people can see and write to.
+ *
+ * The badge used to be a filled "Shared" pill sitting in the text. In a row it
+ * competed with the name for width and won, cutting long names down to "Jo…";
+ * in a tile it took the place of the "Owes you / You owe" line, so a shared
+ * book was the one kind of row that never said which way the money went.
+ * Hanging it off the avatar costs no layout width at all.
+ */
+function Avatar({
+  initial,
+  color,
+  size,
+  shared,
+}: {
+  initial: string;
+  color: string;
+  size: number;
+  shared: boolean;
+}) {
   const theme = useTheme();
+  const badge = Math.round(size * 0.42);
+
   return (
-    <View style={[styles.badge, { backgroundColor: theme.accent }]}>
-      <MaterialIcons name="groups" size={11} color="#ffffff" />
-      <ThemedText style={styles.badgeText}>Shared</ThemedText>
+    <View
+      style={[
+        styles.avatar,
+        { width: size, height: size, backgroundColor: theme.backgroundSelected },
+      ]}>
+      <ThemedText style={[styles.avatarInitial, { fontSize: Math.round(size * 0.44), color }]}>
+        {initial}
+      </ThemedText>
+      {shared && (
+        <View
+          style={[
+            styles.avatarBadge,
+            {
+              width: badge,
+              height: badge,
+              borderRadius: badge,
+              backgroundColor: theme.accent,
+              // A bright ring, not the card's fill: the card is translucent
+              // now, so its own colour would leave the badge with no edge.
+              borderColor: 'rgba(255,255,255,0.55)',
+            },
+          ]}>
+          <MaterialIcons name="group" size={Math.round(badge * 0.64)} color="#ffffff" />
+        </View>
+      )}
     </View>
   );
 }
@@ -672,7 +703,17 @@ function useStanding(person: Row) {
     fresh,
     owesYou,
     color: settled ? theme.textSecondary : owesYou ? MoneyColors.in : MoneyColors.out,
-    label: fresh ? 'No entries yet' : settled ? 'Settled up' : owesYou ? 'Owes you' : 'You owe',
+    // Worked out once, for both views: a shared book used to lose this line
+    // to its badge and so never said which way the money went.
+    label: person.pending
+      ? 'Waiting to join'
+      : fresh
+        ? 'No entries yet'
+        : settled
+          ? 'Settled up'
+          : owesYou
+            ? 'Owes you'
+            : 'You owe',
     initial: person.person.trim().charAt(0).toUpperCase() || '?',
   };
 }
@@ -687,6 +728,7 @@ type RowProps = {
 function PersonRow({ person, onPress, onLongPress, onMore }: RowProps & { onMore: () => void }) {
   const theme = useTheme();
   const { settled, fresh, color, label, initial } = useStanding(person);
+  const shared = isShared(person);
 
   return (
     <Pressable
@@ -695,35 +737,33 @@ function PersonRow({ person, onPress, onLongPress, onMore }: RowProps & { onMore
       delayLongPress={400}
       style={({ pressed }) => [
         styles.card,
-        { backgroundColor: theme.backgroundElement },
+        theme.glass,
         pressed && styles.pressed,
       ]}
-      accessibilityRole="button">
-      <View style={[styles.avatar, { backgroundColor: theme.backgroundSelected }]}>
-        <ThemedText style={[styles.rowInitial, { color: settled ? theme.textSecondary : color }]}>
-          {initial}
-        </ThemedText>
-      </View>
+      accessibilityRole="button"
+      accessibilityLabel={`${person.person}${shared ? ', shared book' : ''}. ${label}.`}>
+      <Avatar
+        initial={initial}
+        color={settled ? theme.textSecondary : color}
+        size={46}
+        shared={shared}
+      />
 
       <View style={styles.middle}>
+        {/* The name now has the whole row to itself. */}
         <View style={styles.nameRow}>
-          {!!person.pinned && <MaterialIcons name="push-pin" size={13} color={theme.accent} />}
+          {!!person.pinned && <MaterialIcons name="push-pin" size={14} color={theme.accentTint} />}
           <ThemedText type="smallBold" numberOfLines={1} style={styles.personName}>
             {person.person}
           </ThemedText>
-          {isShared(person) && <SharedBadge />}
         </View>
         <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-          {person.pending
-            ? 'Waiting for them to join'
-            : fresh
-              ? label
-              : `${label} · ${formatRelativeDay(person.lastDay)}`}
+          {fresh || person.pending ? label : `${label} · ${formatRelativeDay(person.lastDay)}`}
         </ThemedText>
       </View>
 
       <View style={styles.right}>
-        <ThemedText type="smallBold" style={[styles.balanceValue, { color }]}>
+        <ThemedText type="smallBold" style={[styles.balanceValue, { color }]} numberOfLines={1}>
           {formatMoney(Math.abs(person.balance))}
         </ThemedText>
         <Pressable
@@ -742,6 +782,7 @@ function PersonRow({ person, onPress, onLongPress, onMore }: RowProps & { onMore
 function PersonTile({ person, onPress, onLongPress }: RowProps) {
   const theme = useTheme();
   const { settled, color, label, initial } = useStanding(person);
+  const shared = isShared(person);
 
   return (
     <Pressable
@@ -750,29 +791,28 @@ function PersonTile({ person, onPress, onLongPress }: RowProps) {
       delayLongPress={400}
       style={({ pressed }) => [
         styles.tileCard,
-        { backgroundColor: theme.backgroundElement },
+        theme.glass,
         pressed && styles.pressed,
       ]}
-      accessibilityRole="button">
+      accessibilityRole="button"
+      accessibilityLabel={`${person.person}${shared ? ', shared book' : ''}. ${label}.`}>
       {!!person.pinned && (
-        <MaterialIcons name="push-pin" size={13} color={theme.accent} style={styles.tilePin} />
+        <MaterialIcons name="push-pin" size={15} color={theme.accentTint} style={styles.tilePin} />
       )}
-      <View style={[styles.tileAvatar, { backgroundColor: theme.backgroundSelected }]}>
-        <ThemedText style={[styles.rowInitial, { color: settled ? theme.textSecondary : color }]}>
-          {initial}
-        </ThemedText>
-      </View>
+      <Avatar
+        initial={initial}
+        color={settled ? theme.textSecondary : color}
+        size={48}
+        shared={shared}
+      />
       <ThemedText type="smallBold" numberOfLines={1} style={styles.tileName}>
         {person.person}
       </ThemedText>
-      {isShared(person) ? (
-        <SharedBadge />
-      ) : (
-        <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-          {label}
-        </ThemedText>
-      )}
-      <ThemedText type="smallBold" style={[styles.tileAmount, { color }]}>
+      {/* Every tile says which way the money goes, shared or not. */}
+      <ThemedText type="small" themeColor="textSecondary" numberOfLines={1} style={styles.tileLabel}>
+        {label}
+      </ThemedText>
+      <ThemedText type="smallBold" style={[styles.tileAmount, { color }]} numberOfLines={1}>
         {formatMoney(Math.abs(person.balance))}
       </ThemedText>
     </Pressable>
@@ -808,27 +848,33 @@ function EmptyState({
   onAddPerson: () => void;
   onAddShared: () => void;
 }) {
-  const [emoji, title, hint] = search
-    ? ['🔎', 'No matches', `No results for “${search}” in this view.`]
+  const theme = useTheme();
+  const [icon, title, hint] = search
+    ? ['search-off', 'No matches', `No results for “${search}” in this view.`]
     : !hasAnyone
-      ? ['📒', 'No entries yet', 'Add a person or create a shared book to get started.']
+      ? ['receipt-long', 'No entries yet', 'Add a person or create a shared book to get started.']
       : filter === 'people'
-        ? ['👤', 'No people yet', 'Add someone to track personal loans.']
+        ? ['person-off', 'No people yet', 'Add someone to track personal loans.']
         : filter === 'shared'
-          ? ['📚', 'No shared books yet', 'Create a book or join one with an invite code.']
+          ? ['menu-book', 'No shared books yet', 'Create a book or join one with an invite code.']
           : filter === 'archived'
-            ? ['📂', 'Nothing archived', 'Press and hold an item to archive it. Its history is kept.']
+            ? ['folder-off', 'Nothing archived', 'Press and hold an item to archive it. Its history is kept.']
             : filter === 'get'
-              ? ['✓', 'Nobody owes you', 'Everyone you lent to has paid you back.']
+              ? ['check-circle', 'Nobody owes you', 'Everyone you lent to has paid you back.']
               : filter === 'pay'
-                ? ['✓', 'You owe nobody', 'You are all square with everyone.']
+                ? ['check-circle', 'You owe nobody', 'You are all square with everyone.']
                 : filter === 'settled'
-                  ? ['📒', 'Nobody settled yet', 'Items appear here once their balance reaches zero.']
-                  : ['📒', 'No entries here', 'Add an entry to start tracking a balance.'];
+                  ? ['receipt-long', 'Nobody settled yet', 'Items appear here once their balance reaches zero.']
+                  : ['receipt-long', 'No entries here', 'Add an entry to start tracking a balance.'];
 
   return (
     <View style={styles.empty}>
-      <ThemedText style={styles.emptyEmoji}>{emoji}</ThemedText>
+      <MaterialIcons
+        name={icon as React.ComponentProps<typeof MaterialIcons>['name']}
+        size={34}
+        color={theme.textSecondary}
+        style={styles.emptyIcon}
+      />
       <ThemedText type="smallBold">{title}</ThemedText>
       <ThemedText type="small" themeColor="textSecondary" style={styles.emptyHint}>
         {hint}
@@ -852,6 +898,9 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: Spacing.four,
+    // The glass tab bar is translucent and absolute, so this screen runs the
+    // full height and has to clear both the bar and the floating Add button
+    // sitting above it.
     paddingBottom: BottomTabInset + Spacing.six,
   },
   header: {
@@ -887,7 +936,7 @@ const styles = StyleSheet.create({
   },
   tile: {
     flex: 1,
-    borderRadius: 20,
+    borderRadius: Radius.card,
     padding: Spacing.three,
     gap: 2,
   },
@@ -907,7 +956,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     paddingHorizontal: Spacing.three,
   },
   searchInput: {
@@ -937,7 +986,7 @@ const styles = StyleSheet.create({
   viewSwitch: {
     flexDirection: 'row',
     alignItems: 'stretch',
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     padding: Spacing.one,
     gap: Spacing.half,
   },
@@ -970,19 +1019,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.three,
     padding: Spacing.three,
-    borderRadius: 16,
+    borderRadius: Radius.card,
     marginBottom: Spacing.two,
   },
   avatar: {
-    width: 46,
-    height: 46,
     borderRadius: 999,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  rowInitial: {
-    fontSize: 20,
+  avatarInitial: {
     fontWeight: '700',
+  },
+  avatarBadge: {
+    position: 'absolute',
+    right: -2,
+    bottom: -2,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   middle: {
     flex: 1,
@@ -1012,52 +1066,36 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
-  badge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-    borderRadius: 999,
-    paddingHorizontal: Spacing.two,
-    paddingVertical: 1,
-    alignSelf: 'flex-start',
-  },
-  badgeText: {
-    color: '#ffffff',
-    fontSize: 10,
-    fontWeight: '700',
-  },
   tileCard: {
     flex: 1,
-    borderRadius: 16,
-    padding: Spacing.three,
+    borderRadius: Radius.card,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.three,
     marginBottom: Spacing.two,
-    gap: 2,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 150,
   },
   tilePin: {
     position: 'absolute',
     top: Spacing.two,
     right: Spacing.two,
   },
-  tileAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 999,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: Spacing.two,
-  },
   tileName: {
     fontSize: 15,
     textAlign: 'center',
+    marginTop: Spacing.two,
+    alignSelf: 'stretch',
+  },
+  tileLabel: {
+    textAlign: 'center',
+    alignSelf: 'stretch',
   },
   tileAmount: {
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: '700',
     marginTop: Spacing.one,
     textAlign: 'center',
+    alignSelf: 'stretch',
   },
   hint: {
     textAlign: 'center',
@@ -1072,15 +1110,14 @@ const styles = StyleSheet.create({
     gap: Spacing.one,
     paddingVertical: Spacing.six,
   },
-  emptyEmoji: {
-    fontSize: 40,
-    marginBottom: Spacing.one,
+  emptyIcon: {
+    marginBottom: Spacing.two,
   },
   emptyAction: {
     minHeight: 44,
     justifyContent: 'center',
     paddingHorizontal: Spacing.three,
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     marginTop: Spacing.one,
   },
   emptyHint: {

@@ -1,3 +1,4 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Stack, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
@@ -13,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { iconFor, type CategoryIcon } from '@/constants/categories';
 import { CURRENCY } from '@/constants/app';
 import { Spacing } from '@/constants/theme';
 import { getBudgets, getCategories, OVERALL_BUDGET, setBudget } from '@/db';
@@ -46,10 +48,10 @@ export default function BudgetsScreen() {
     router.back();
   }
 
-  function renderRow(key: string, emoji: string, name: string) {
+  function renderRow(key: string, icon: CategoryIcon, name: string) {
     return (
-      <View key={key} style={[styles.row, { backgroundColor: theme.backgroundElement }]}>
-        <ThemedText style={styles.emoji}>{emoji}</ThemedText>
+      <View key={key} style={[styles.row, theme.glass]}>
+        <MaterialIcons name={icon} size={20} color={theme.accentTint} />
         <ThemedText type="small" style={styles.name} numberOfLines={1}>
           {name}
         </ThemedText>
@@ -85,12 +87,12 @@ export default function BudgetsScreen() {
           <ThemedText type="smallBold" style={styles.label}>
             Overall
           </ThemedText>
-          {renderRow(OVERALL_BUDGET, '🎯', 'All spending')}
+          {renderRow(OVERALL_BUDGET, 'donut-large', 'All spending')}
 
           <ThemedText type="smallBold" style={styles.label}>
             Per category
           </ThemedText>
-          {categories.map((cat) => renderRow(cat.name, cat.emoji, cat.name))}
+          {categories.map((cat) => renderRow(cat.name, iconFor(cat.emoji), cat.name))}
 
           <Pressable
             onPress={onSave}
@@ -125,9 +127,6 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     borderRadius: Spacing.three,
     paddingHorizontal: Spacing.three,
-  },
-  emoji: {
-    fontSize: 16,
   },
   name: {
     flex: 1,

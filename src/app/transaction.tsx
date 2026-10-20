@@ -2,21 +2,22 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Image } from 'expo-image';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { FormCard, FormLink, FormLinks, FormRow, PrimaryButton } from '@/components/form';
+import { confirm } from '@/lib/confirm';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
-import { Spacing } from '@/constants/theme';
+import { Radius, Spacing } from '@/constants/theme';
 import {
   addTransaction,
   deleteTransaction,
   getTransaction,
   restoreTransaction,
 } from '@/db';
-import { useCategoryEmoji, useQuery } from '@/db/hooks';
+import { useCategoryIcon, useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
 import { formatFullDate, formatTime, todayKey } from '@/lib/date';
 import { formatSigned } from '@/lib/money';
@@ -30,7 +31,7 @@ import { offerUndo } from '@/lib/undo';
 export default function TransactionScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const emojiFor = useCategoryEmoji();
+  const iconFor = useCategoryIcon();
   const { id } = useLocalSearchParams<{ id: string }>();
 
   // Live, so coming back from the edit screen shows the saved changes.
@@ -79,24 +80,23 @@ export default function TransactionScreen() {
   };
 
   const remove = () => {
-    Alert.alert('Delete entry', 'This removes the entry. You can undo for a few seconds.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          const removed = entry;
-          deleteTransaction(removed.id);
-          offerUndo(
-            'Entry deleted',
-            () => restoreTransaction(removed),
-            8000,
-            () => (removed.receipt_path ? deleteReceipt(removed.receipt_path) : undefined)
-          );
-          router.back();
-        },
+    confirm({
+      title: 'Delete entry',
+      message: 'This removes the entry. You can undo for a few seconds.',
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: () => {
+        const removed = entry;
+        deleteTransaction(removed.id);
+        offerUndo(
+          'Entry deleted',
+          () => restoreTransaction(removed),
+          8000,
+          () => (removed.receipt_path ? deleteReceipt(removed.receipt_path) : undefined)
+        );
+        router.back();
       },
-    ]);
+    });
   };
 
   return (
@@ -106,7 +106,7 @@ export default function TransactionScreen() {
         {/* What and how much */}
         <ThemedView type="backgroundElement" style={styles.hero}>
           <View style={[styles.heroIcon, { backgroundColor: `${color}1A` }]}>
-            <ThemedText style={styles.heroEmoji}>{emojiFor(entry.category, entry.type)}</ThemedText>
+            <MaterialIcons name={iconFor(entry.category, entry.type)} size={26} color={color} />
           </View>
           <ThemedText type="smallBold" themeColor="textSecondary">
             {entry.category}
@@ -192,7 +192,7 @@ const styles = StyleSheet.create({
     gap: Spacing.three,
   },
   hero: {
-    borderRadius: 20,
+    borderRadius: Radius.card,
     padding: Spacing.four,
     alignItems: 'center',
     gap: Spacing.one,
@@ -200,14 +200,10 @@ const styles = StyleSheet.create({
   heroIcon: {
     width: 64,
     height: 64,
-    borderRadius: 20,
+    borderRadius: Radius.card,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: Spacing.two,
-  },
-  heroEmoji: {
-    fontSize: 30,
-    lineHeight: 38,
   },
   amount: {
     fontSize: 34,
@@ -230,7 +226,7 @@ const styles = StyleSheet.create({
   thumb: {
     width: 88,
     height: 88,
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     marginTop: Spacing.one,
   },
   viewerBackdrop: {

@@ -56,7 +56,7 @@ export function PinPad({ value, onChange, onComplete, length = PIN_LENGTH, error
           <Pressable
             key={k}
             onPress={() => press(k)}
-            style={({ pressed }) => [styles.key, pressed && { backgroundColor: theme.backgroundElement }]}
+            style={({ pressed }) => [styles.key, pressed && theme.glass]}
             accessibilityRole="button">
             <ThemedText style={styles.keyText}>{k}</ThemedText>
           </Pressable>
@@ -66,7 +66,7 @@ export function PinPad({ value, onChange, onComplete, length = PIN_LENGTH, error
         {onBiometric ? (
           <Pressable
             onPress={onBiometric}
-            style={({ pressed }) => [styles.key, pressed && { backgroundColor: theme.backgroundElement }]}
+            style={({ pressed }) => [styles.key, pressed && theme.glass]}
             accessibilityRole="button"
             accessibilityLabel="Unlock with biometrics">
             <MaterialIcons name="fingerprint" size={30} color={theme.accent} />
@@ -77,14 +77,14 @@ export function PinPad({ value, onChange, onComplete, length = PIN_LENGTH, error
 
         <Pressable
           onPress={() => press('0')}
-          style={({ pressed }) => [styles.key, pressed && { backgroundColor: theme.backgroundElement }]}
+          style={({ pressed }) => [styles.key, pressed && theme.glass]}
           accessibilityRole="button">
           <ThemedText style={styles.keyText}>0</ThemedText>
         </Pressable>
 
         <Pressable
           onPress={backspace}
-          style={({ pressed }) => [styles.key, pressed && { backgroundColor: theme.backgroundElement }]}
+          style={({ pressed }) => [styles.key, pressed && theme.glass]}
           accessibilityRole="button"
           accessibilityLabel="Delete">
           <MaterialIcons name="backspace" size={24} color={theme.textSecondary} />

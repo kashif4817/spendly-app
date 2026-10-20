@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, StyleSheet, useColorScheme } from 'react-native';
 
-import { Brand, Colors } from '@/constants/theme';
+import { Aurora, Colors } from '@/constants/theme';
 
 // Must match the expo-splash-screen colors in app.json so the native splash
 // hands off to this overlay without a visible seam.
@@ -16,7 +16,7 @@ const SPLASH = {
   light: {
     background: '#FFFFFF',
     mark: require('../../assets/images/spendly-mark.png'),
-    ink: Brand.navy,
+    ink: '#171243',
     tagline: Colors.light.textSecondary,
   },
   dark: {
@@ -136,7 +136,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   suffix: {
-    color: Brand.teal,
+    color: Aurora.indigo,
   },
   tagline: {
     fontSize: 15,

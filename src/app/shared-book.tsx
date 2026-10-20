@@ -14,12 +14,20 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ActionSheet } from '@/components/action-sheet';
-import { DayHeader } from '@/components/day-header';
+import { GlassButton } from '@/components/glass';
 import { PromptModal } from '@/components/prompt-modal';
+import {
+  SettleButton,
+  StatementActions,
+  StatementBalance,
+  StatementDay,
+  StatementHeading,
+  StatementRow,
+} from '@/components/statement';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
   addSharedEntry,
   getBookFlags,
@@ -32,7 +40,6 @@ import {
   getSharedMemberName,
   setBookArchived,
   setBookPinned,
-  type SharedEntry,
 } from '@/db';
 import { useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
@@ -45,16 +52,27 @@ import {
   rotateJoinCode,
   SharedBookError,
 } from '@/sync/shared';
+import { isRealtimeLive } from '@/sync/realtime';
 import { useSync } from '@/sync/provider';
 
 const SETTLED_EPSILON = 0.005;
 
 /**
- * How long the balance waits on the server before the saved one is shown
- * anyway. A flaky connection can hang a request for far longer than this, and
- * a book that works offline shouldn't lock you out of it in the meantime.
+ * How long to keep saying "checking" before admitting the saved balance is
+ * all we have. The balance itself is on screen the whole time, so this only
+ * governs the wording — it no longer gates the book.
  */
-const REFRESH_TIMEOUT_MS = 12_000;
+const REFRESH_TIMEOUT_MS = 6_000;
+
+/**
+ * How recently a sync must have finished for a live socket to count as proof
+ * the book is current.
+ *
+ * Realtime delivers the other phone's entries as they happen, so once it is
+ * subscribed AND a pull has run since, a fetch on open would ask the server
+ * for rows it has already sent us. Opening the book then costs nothing.
+ */
+const FRESH_WINDOW_MS = 60_000;
 
 /**
  * How far the balance on screen can be trusted:
@@ -67,7 +85,7 @@ type Freshness = 'checking' | 'current' | 'saved';
 export default function SharedBookScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { status, refreshNow } = useSync();
+  const { status, refreshShared, lastSyncedAt } = useSync();
   const params = useLocalSearchParams<{ id?: string }>();
   const bookId = params.id ?? '';
 
@@ -95,9 +113,13 @@ export default function SharedBookScreen() {
 
   /**
    * The other member may have added entries while this phone was offline, and
-   * those only exist here once a sync has pulled them. Until then the balance
-   * is a guess, so the book opens by checking, and holds the balance and the
-   * buttons back until it knows.
+   * those only exist here once a sync has pulled them.
+   *
+   * The book no longer waits on that. The saved balance is right far more
+   * often than not, it is the only balance that exists offline, and hiding it
+   * behind a spinner made every visit feel like a page load. It is shown
+   * straight away and corrected if the pull disagrees; only Settle up, which
+   * turns the balance into an actual payment, waits for a confirmed one.
    */
   const [freshness, setFreshness] = useState<Freshness>('checking');
   // Whether the running check came from pull-to-refresh, which draws its own
@@ -106,29 +128,58 @@ export default function SharedBookScreen() {
   const latestCheck = useRef(0);
   const checking = freshness === 'checking';
 
-  const check = useCallback(async () => {
-    const run = ++latestCheck.current;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const gaveUp = new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), REFRESH_TIMEOUT_MS);
-    });
+  // Read inside `check` without making it a dependency: `lastSyncedAt` is a new
+  // Date on every cycle, and rebuilding `check` would re-fire the effect below
+  // on each one — a sync triggering a sync.
+  const lastSyncedRef = useRef(lastSyncedAt);
+  useEffect(() => {
+    lastSyncedRef.current = lastSyncedAt;
+  }, [lastSyncedAt]);
 
-    const sync = refreshNow();
-    const ok = await Promise.race([sync, gaveUp]);
-    clearTimeout(timer);
+  const check = useCallback(
+    async (force = false) => {
+      const run = ++latestCheck.current;
 
-    // Only the newest check gets to say how fresh the screen is.
-    if (run !== latestCheck.current) return;
-    setFreshness(ok ? 'current' : 'saved');
-    setPulled(false);
+      // The socket is live and a pull has run since it came up, so the other
+      // phone's entries are already here. Nothing to fetch.
+      const syncedAt = lastSyncedRef.current;
+      if (
+        !force &&
+        isRealtimeLive() &&
+        syncedAt &&
+        Date.now() - syncedAt.getTime() < FRESH_WINDOW_MS
+      ) {
+        setFreshness('current');
+        setPulled(false);
+        return;
+      }
 
-    // A slow sync can still land after we stopped waiting for it.
-    if (!ok) {
-      sync.then((late) => {
-        if (late && run === latestCheck.current) setFreshness('current');
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const gaveUp = new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), REFRESH_TIMEOUT_MS);
       });
-    }
-  }, [refreshNow]);
+
+      // Only the shared tables: categories and expenses have no bearing on
+      // what two people owe each other, and waiting on them is what made
+      // opening a book take as long as it did.
+      const sync = refreshShared(force);
+      const ok = await Promise.race([sync, gaveUp]);
+      clearTimeout(timer);
+
+      // Only the newest check gets to say how fresh the screen is.
+      if (run !== latestCheck.current) return;
+      setFreshness(ok ? 'current' : 'saved');
+      setPulled(false);
+
+      // A slow sync can still land after we stopped waiting for it.
+      if (!ok) {
+        void sync.then((late) => {
+          if (late && run === latestCheck.current) setFreshness('current');
+        });
+      }
+    },
+    [refreshShared]
+  );
 
   useEffect(() => {
     void check();
@@ -145,11 +196,12 @@ export default function SharedBookScreen() {
     return () => sub.remove();
   }, [check]);
 
+  /** Pull-to-refresh and the header button: always a real round trip. */
   const refresh = (fromPull = false) => {
     if (checking) return;
     setFreshness('checking');
     setPulled(fromPull);
-    void check();
+    void check(true);
   };
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -214,7 +266,9 @@ export default function SharedBookScreen() {
 
   /** Settle up: whoever is behind records a payment that zeroes the balance. */
   const settleUp = () => {
-    if (settled || !otherId || checking) return;
+    // The one action whose AMOUNT is the balance, so it is the one action that
+    // genuinely needs a confirmed one. Adding an entry only ever appends.
+    if (settled || !otherId || freshness !== 'current') return;
     // If they owe you, the settling payment comes from them.
     addSharedEntry({
       bookId,
@@ -238,9 +292,15 @@ export default function SharedBookScreen() {
           </View>
         ) : (
           <View style={styles.missing}>
-            <ThemedText type="smallBold">Book not found</ThemedText>
+            <ThemedText type="smallBold">
+              {freshness === 'saved' ? 'Not on this phone yet' : 'Book not found'}
+            </ThemedText>
             <ThemedText type="small" themeColor="textSecondary" style={styles.center}>
-              It may have been left or removed.
+              {/* The screen no longer waits on the network, so it can reach
+                  here offline — where "removed" would simply be wrong. */}
+              {freshness === 'saved'
+                ? 'It needs a connection the first time. Try again once you’re back online.'
+                : 'It may have been left or removed.'}
             </ThemedText>
           </View>
         )}
@@ -325,48 +385,36 @@ export default function SharedBookScreen() {
           }
           ListHeaderComponent={
             <View style={styles.head}>
-              <ThemedView type="backgroundElement" style={styles.balanceCard}>
-                <View style={styles.liveRow}>
-                  <MaterialIcons name={syncIcon} size={17} color={syncColor} />
-                  <ThemedText type="small" style={{ color: syncColor }}>
-                    {liveLabel}
-                  </ThemedText>
-                </View>
-                {checking ? (
-                  // The saved balance may be about to change, so it isn't
-                  // shown at all rather than shown and then corrected.
-                  <View style={styles.balanceLoading}>
-                    <ActivityIndicator size="large" color={theme.accent} />
-                    <ThemedText type="small" themeColor="textSecondary">
-                      Getting the latest balance…
+              <StatementBalance
+                caption={
+                  settled ? 'All settled' : owesYou ? `${theirLabel} owes you` : `You owe ${theirLabel}`
+                }
+                amount={balance}
+                term={settled ? null : owesYou ? 'Receivable' : 'Payable'}
+                color={statusColor}
+                status={
+                  /* The balance is always on screen — it is the only one that
+                     exists offline, and it is right far more often than not.
+                     This chip says how much to trust it. */
+                  <View style={[styles.liveRow, theme.glassWeak]}>
+                    {checking ? (
+                      <ActivityIndicator size="small" color={syncColor} />
+                    ) : (
+                      <MaterialIcons name={syncIcon} size={15} color={syncColor} />
+                    )}
+                    <ThemedText type="small" style={{ color: syncColor }}>
+                      {liveLabel}
                     </ThemedText>
                   </View>
-                ) : (
-                  <>
-                    <ThemedText type="small" themeColor="textSecondary">
-                      {settled
-                        ? 'All settled'
-                        : owesYou
-                          ? `${theirLabel} owes you`
-                          : `You owe ${theirLabel}`}
-                    </ThemedText>
-                    <ThemedText style={[styles.balance, { color: statusColor }]}>
-                      {formatMoney(Math.abs(balance))}
-                    </ThemedText>
-                    {/* The accounting term, same as a person's statement shows. */}
-                    <ThemedText type="small" themeColor="textSecondary">
-                      {settled ? '' : owesYou ? 'Receivable' : 'Payable'}
-                    </ThemedText>
-                  </>
-                )}
-              </ThemedView>
+                }
+              />
 
               {waiting && (
                 <Pressable
                   onPress={() => setCodeOpen(true)}
                   style={({ pressed }) => [
                     styles.inviteCard,
-                    { backgroundColor: theme.backgroundElement },
+                    theme.glass,
                     pressed && styles.pressed,
                   ]}>
                   <MaterialIcons name="person-add" size={20} color={theme.accent} />
@@ -380,38 +428,25 @@ export default function SharedBookScreen() {
                 </Pressable>
               )}
 
-              {/* Held back while checking: an entry, and a settle-up above all,
-                  should be made against the real balance, not the saved one. */}
-              <View style={styles.actions}>
-                <Pressable
-                  onPress={() => add(me)}
-                  disabled={checking}
-                  style={({ pressed }) => [
-                    styles.actionBtn,
-                    { backgroundColor: MoneyColors.in },
-                    checking && styles.disabled,
-                    pressed && styles.pressed,
-                  ]}>
-                  <ThemedText style={styles.actionLabel}>＋ I paid</ThemedText>
-                </Pressable>
-                <Pressable
+              {/* Recording who paid only ever APPENDS a row, so it never
+                  needed the balance to be confirmed first. Waiting on a sync
+                  to enable these is what made the book feel slow. */}
+              <StatementActions>
+                <ActionButton label="I paid" tone="in" onPress={() => add(me)} />
+                <ActionButton
+                  label={otherName ? `${otherName.split(' ')[0]} paid` : 'They paid'}
+                  tone="out"
+                  disabled={!otherId}
                   onPress={() => otherId && add(otherId)}
-                  disabled={!otherId || checking}
-                  style={({ pressed }) => [
-                    styles.actionBtn,
-                    { backgroundColor: MoneyColors.out },
-                    (!otherId || checking) && styles.disabled,
-                    pressed && styles.pressed,
-                  ]}>
-                  <ThemedText style={styles.actionLabel}>
-                    {otherName ? `＋ ${otherName.split(' ')[0]} paid` : '＋ They paid'}
-                  </ThemedText>
-                </Pressable>
-              </View>
+                />
+              </StatementActions>
 
               {!settled && otherId && (
-                <Pressable
-                  disabled={checking}
+                <SettleButton
+                  // Settling turns the balance into a real payment, so this is
+                  // the one control that waits for a balance we've confirmed.
+                  disabled={freshness !== 'current'}
+                  label={checking ? 'Settle up — checking balance…' : 'Settle up'}
                   onPress={() =>
                     confirm({
                       title: 'Settle up?',
@@ -422,33 +457,45 @@ export default function SharedBookScreen() {
                       onConfirm: settleUp,
                     })
                   }
-                  style={[styles.settleBtn, checking && styles.disabled]}
-                  hitSlop={8}>
-                  <ThemedText type="smallBold">Settle up</ThemedText>
-                </Pressable>
+                />
               )}
 
-              <ThemedText type="smallBold" style={styles.statementTitle}>
-                Statement
-              </ThemedText>
+              <StatementHeading />
             </View>
           }
           renderSectionHeader={({ section }) => (
-            <DayHeader day={section.day} net={section.net} first={section === days[0]} />
+            <StatementDay day={section.day} net={section.net} first={section === days[0]} />
           )}
-          renderItem={({ item }) => (
-            <EntryRow
-              entry={item}
-              me={me}
-              otherName={otherName}
-              synced={!pending.has(item.id)}
-              onPress={() =>
-                item.author_id === me
-                  ? router.push(`/shared-entry?id=${encodeURIComponent(item.id)}` as Href)
-                  : setNotice('Only the person who added an entry can change it.')
-              }
-            />
-          )}
+          renderItem={({ item }) => {
+            const youPaid = item.payer_id === me;
+            return (
+              <StatementRow
+                title={youPaid ? 'You paid' : `${otherName ?? 'They'} paid`}
+                // The day is in the strip above, so an empty note shows the time.
+                note={item.note?.trim() || formatTime(item.created_at)}
+                amount={item.amount}
+                positive={youPaid}
+                color={youPaid ? theme.money.in : theme.money.out}
+                trailing={
+                  /* Only when it hasn't gone up yet. A tick on every single row
+                     told you nothing and left the page covered in badges. */
+                  pending.has(item.id) ? (
+                    <MaterialIcons
+                      name="cloud-upload"
+                      size={13}
+                      color={theme.accentTint}
+                      accessibilityLabel="Waiting to sync"
+                    />
+                  ) : undefined
+                }
+                onPress={() =>
+                  item.author_id === me
+                    ? router.push(`/shared-entry?id=${encodeURIComponent(item.id)}` as Href)
+                    : setNotice('Only the person who added an entry can change it.')
+                }
+              />
+            );
+          }}
           ListEmptyComponent={
             // Not "no entries" while the other phone's entries may still be on
             // their way down.
@@ -520,54 +567,36 @@ export default function SharedBookScreen() {
 }
 
 /**
- * One line of the statement. The sign is worked out here, per viewer: the row
- * is the same on both phones, but "you paid" on one is "they paid" on the other.
+ * One of the two "who paid" buttons.
+ *
+ * Tinted rather than filled: these sit directly under the balance, and two
+ * solid blocks of green and red drowned out the number they exist to change.
  */
-function EntryRow({
-  entry,
-  me,
-  otherName,
-  synced,
+function ActionButton({
+  label,
+  tone,
+  disabled,
   onPress,
 }: {
-  entry: SharedEntry;
-  me: string;
-  otherName: string | null;
-  /** False while the entry is still queued to go up. */
-  synced: boolean;
+  label: string;
+  tone: 'in' | 'out';
+  disabled?: boolean;
   onPress: () => void;
 }) {
   const theme = useTheme();
-  const youPaid = entry.payer_id === me;
-  const color = youPaid ? MoneyColors.in : MoneyColors.out;
-  const who = youPaid ? 'You paid' : `${otherName ?? 'They'} paid`;
 
   return (
-    <Pressable
+    <GlassButton
+      label={label}
+      // The same signs the statement rows below use: what you put in reads as
+      // a plus, what they put in as a minus.
+      icon={tone === 'in' ? 'add' : 'remove'}
+      variant="solid"
+      tint={theme.moneyButton[tone]}
+      disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [styles.entryRow, pressed && { opacity: 0.6 }]}>
-      <View style={styles.entryMiddle}>
-        <View style={styles.entryWho}>
-          <ThemedText type="smallBold">{who}</ThemedText>
-          {/* On every entry, yours included — the useful question is "has the
-              other person got this yet?", not "who typed it?". */}
-          <MaterialIcons
-            name={synced ? 'cloud-done' : 'cloud-upload'}
-            size={13}
-            color={synced ? theme.textSecondary : theme.accent}
-            accessibilityLabel={synced ? 'Synced' : 'Waiting to sync'}
-          />
-        </View>
-        <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-          {/* The day is in the divider above, so an empty note shows the time. */}
-          {entry.note?.trim() || formatTime(entry.created_at)}
-        </ThemedText>
-      </View>
-      <ThemedText type="smallBold" style={{ color }}>
-        {youPaid ? '+' : '−'}
-        {formatMoney(entry.amount)}
-      </ThemedText>
-    </Pressable>
+      style={styles.actionBtn}
+    />
   );
 }
 
@@ -582,22 +611,23 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.four,
+    // A pushed screen, not a tab — there is no tab bar down there to clear.
+    paddingBottom: Spacing.six,
   },
   head: {
     gap: Spacing.three,
   },
-  balanceCard: {
-    borderRadius: 20,
-    padding: Spacing.four,
-    gap: Spacing.half,
-    alignItems: 'center',
-  },
+  // A chip rather than a line of text: it reads as a status attached to the
+  // balance below it, not as a heading for the card.
   liveRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.one,
-    marginBottom: Spacing.one,
+    gap: Spacing.two,
+    borderRadius: 999,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one,
+    marginBottom: Spacing.two,
+    minHeight: 28,
   },
   headerActions: {
     flexDirection: 'row',
@@ -610,80 +640,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  balanceLoading: {
-    // Roughly the height of the balance it stands in for, so the card
-    // doesn't jump when the number arrives.
-    minHeight: 94,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.two,
-  },
-  liveDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 999,
-  },
-  balance: {
-    fontSize: 44,
-    fontWeight: '700',
-    lineHeight: 50,
-  },
   inviteCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.three,
-    borderRadius: 16,
+    borderRadius: Radius.card,
     padding: Spacing.three,
   },
   inviteText: {
     flex: 1,
     gap: 2,
   },
-  actions: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-  },
+  // GlassButton brings the shape; this only shares the row evenly.
   actionBtn: {
     flex: 1,
-    borderRadius: 12,
-    paddingVertical: Spacing.three,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 50,
-  },
-  actionLabel: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
   },
   disabled: {
     opacity: 0.4,
   },
   pressed: {
     opacity: 0.85,
-  },
-  settleBtn: {
-    alignItems: 'center',
-    paddingVertical: Spacing.one,
-  },
-  statementTitle: {
-    marginTop: Spacing.one,
-  },
-  entryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.three,
-    paddingVertical: Spacing.two,
-  },
-  entryMiddle: {
-    flex: 1,
-    gap: 1,
-  },
-  entryWho: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.one,
   },
   empty: {
     paddingVertical: Spacing.five,
@@ -694,10 +670,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.one,
-  },
-  emoji: {
-    fontSize: 40,
-    marginBottom: Spacing.one,
   },
   center: {
     textAlign: 'center',

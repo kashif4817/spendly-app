@@ -3,7 +3,6 @@ import { Image } from 'expo-image';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -26,11 +25,13 @@ import {
   PrimaryButton,
 } from '@/components/form';
 import { Segmented } from '@/components/segmented';
+import { ActionSheet } from '@/components/action-sheet';
+import { confirm, notify } from '@/lib/confirm';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
-import { CATEGORY_EMOJIS } from '@/constants/categories';
-import { Spacing } from '@/constants/theme';
+import { CATEGORY_ICONS, iconFor } from '@/constants/categories';
+import { Radius, Spacing } from '@/constants/theme';
 import {
   addCategory,
   addTransaction,
@@ -63,7 +64,8 @@ import {
 } from '@/lib/receipts';
 
 /** Icon a brand-new category starts with until the user picks another. */
-const NEW_CAT_EMOJI = '🏷️';
+/** What a brand-new category is drawn with until the user picks something. */
+const NEW_CAT_ICON = 'label';
 
 export default function EntryScreen() {
   const theme = useTheme();
@@ -88,7 +90,7 @@ export default function EntryScreen() {
 
   const [addingCategory, setAddingCategory] = useState(false);
   const [newCategory, setNewCategory] = useState('');
-  const [newCategoryEmoji, setNewCategoryEmoji] = useState(NEW_CAT_EMOJI);
+  const [newCategoryEmoji, setNewCategoryEmoji] = useState(NEW_CAT_ICON);
   const [catMenuOpen, setCatMenuOpen] = useState(false);
   const [catSearch, setCatSearch] = useState('');
   // When set, the sheet swaps its list for the icon grid: either an existing
@@ -104,6 +106,7 @@ export default function EntryScreen() {
   const [receiptPath, setReceiptPath] = useState<string | null>(existing?.receipt_path ?? null);
   const [receiptView, setReceiptView] = useState<string | null>(null);
   const [viewerOpen, setViewerOpen] = useState(false);
+  const [attachOpen, setAttachOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const categories = useQuery(() => getCategories(type), [type]);
@@ -120,7 +123,7 @@ export default function EntryScreen() {
     setCatMenuOpen(false);
     setAddingCategory(false);
     setNewCategory('');
-    setNewCategoryEmoji(NEW_CAT_EMOJI);
+    setNewCategoryEmoji(NEW_CAT_ICON);
     setCatSearch('');
     setIconTarget(null);
     cancelRename();
@@ -145,10 +148,7 @@ export default function EntryScreen() {
     }
     const result = renameCategory(cat.id, next);
     if (result === 'duplicate') {
-      Alert.alert(
-        'Name already used',
-        `Another ${cat.type === 'in' ? 'income' : 'expense'} category is already called “${next}”.`
-      );
+      notify('Name already used', `Another ${cat.type === 'in' ? 'income' : 'expense'} category is already called “${next}”.`);
       return;
     }
     if (result !== 'ok') {
@@ -201,11 +201,7 @@ export default function EntryScreen() {
   }
 
   function attach() {
-    Alert.alert('Add receipt', 'Attach a photo of your receipt.', [
-      { text: 'Take photo', onPress: () => addFrom('camera') },
-      { text: 'Choose from gallery', onPress: () => addFrom('library') },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    setAttachOpen(true);
   }
 
   async function addFrom(source: 'camera' | 'library') {
@@ -214,7 +210,7 @@ export default function EntryScreen() {
       if (!raw) return;
       setPending(await compressReceipt(raw));
     } catch {
-      Alert.alert('Couldn’t add photo', 'Please try again.');
+      notify('Couldn’t add photo', 'Please try again.');
     }
   }
 
@@ -230,11 +226,11 @@ export default function EntryScreen() {
   async function onSave() {
     const value = parseAmount(amount);
     if (value <= 0) {
-      Alert.alert('Enter an amount', 'The amount must be greater than zero.');
+      notify('Enter an amount', 'The amount must be greater than zero.');
       return;
     }
     if (!category) {
-      Alert.alert('Pick a category', 'Choose a category for this entry.');
+      notify('Pick a category', 'Choose a category for this entry.');
       return;
     }
 
@@ -259,12 +255,9 @@ export default function EntryScreen() {
             setTransactionReceipt(id, savedReceiptPath);
           } catch (e) {
             const quota = e instanceof ReceiptError && e.code === 'quota';
-            Alert.alert(
-              'Receipt not attached',
-              quota
+            notify('Receipt not attached', quota
                 ? 'You’ve reached your 100 MB receipt limit. Delete some receipts and try again.'
-                : 'Couldn’t upload the receipt (are you online?). Your entry was saved without it.'
-            );
+                : 'Couldn’t upload the receipt (are you online?). Your entry was saved without it.');
           }
         }
       }
@@ -302,7 +295,7 @@ export default function EntryScreen() {
   function onDuplicate() {
     const value = parseAmount(amount);
     if (value <= 0 || !category) {
-      Alert.alert('Can’t duplicate', 'Enter an amount and pick a category first.');
+      notify('Can’t duplicate', 'Enter an amount and pick a category first.');
       return;
     }
     addTransaction({ type, amount: value, category, note: note.trim(), day: todayKey() });
@@ -311,25 +304,24 @@ export default function EntryScreen() {
 
   function onDelete() {
     if (!editId) return;
-    Alert.alert('Delete entry', 'This removes the entry. You can undo for a few seconds.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          const removed = existing ?? getTransaction(editId);
-          if (!removed) return;
-          deleteTransaction(editId);
-          offerUndo(
-            'Entry deleted',
-            () => restoreTransaction(removed),
-            8000,
-            () => removed.receipt_path ? deleteReceipt(removed.receipt_path) : undefined
-          );
-          router.back();
-        },
+    confirm({
+      title: 'Delete entry',
+      message: 'This removes the entry. You can undo for a few seconds.',
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: () => {
+  const removed = existing ?? getTransaction(editId);
+  if (!removed) return;
+  deleteTransaction(editId);
+  offerUndo(
+    'Entry deleted',
+    () => restoreTransaction(removed),
+    8000,
+    () => removed.receipt_path ? deleteReceipt(removed.receipt_path) : undefined
+  );
+  router.back();
       },
-    ]);
+    });
   }
 
   const isIncome = type === 'in';
@@ -360,7 +352,7 @@ export default function EntryScreen() {
             <FormRow icon="category" label="Category" onPress={() => setCatMenuOpen(true)} chevron>
               {selectedCat ? (
                 <View style={styles.selectValue}>
-                  <ThemedText style={styles.chipEmoji}>{selectedCat.emoji}</ThemedText>
+                  <MaterialIcons name={iconFor(selectedCat.emoji)} size={18} color={theme.text} />
                   <ThemedText type="smallBold">{selectedCat.name}</ThemedText>
                 </View>
               ) : (
@@ -452,7 +444,7 @@ export default function EntryScreen() {
         animationType="slide"
         onRequestClose={closeCatMenu}>
         <Pressable style={styles.catBackdrop} onPress={closeCatMenu}>
-          <Pressable style={[styles.catSheet, { backgroundColor: theme.background }]}>
+          <Pressable style={[styles.catSheet, theme.glassOverlay]}>
             <View style={styles.catHandle} />
 
             {iconTarget ? (
@@ -470,20 +462,27 @@ export default function EntryScreen() {
                 </View>
                 <ScrollView style={styles.catList} showsVerticalScrollIndicator={false}>
                   <View style={styles.iconGrid}>
-                    {CATEGORY_EMOJIS.map((emoji) => {
+                    {CATEGORY_ICONS.map((name) => {
                       const current =
-                        emoji === (iconTarget === 'new' ? newCategoryEmoji : iconTarget.emoji);
+                        name === iconFor(iconTarget === 'new' ? newCategoryEmoji : iconTarget.emoji);
                       return (
                         <Pressable
-                          key={emoji}
-                          onPress={() => pickEmoji(emoji)}
+                          key={name}
+                          onPress={() => pickEmoji(name)}
+                          accessibilityRole="button"
+                          accessibilityLabel={name.replace(/-/g, ' ')}
+                          accessibilityState={{ selected: current }}
                           style={({ pressed }) => [
                             styles.iconCell,
-                            { backgroundColor: theme.backgroundElement },
+                            theme.glass,
                             current && { borderColor: accent, borderWidth: 2 },
                             pressed && { opacity: 0.6 },
                           ]}>
-                          <ThemedText style={styles.iconCellEmoji}>{emoji}</ThemedText>
+                          <MaterialIcons
+                            name={name}
+                            size={22}
+                            color={current ? accent : theme.text}
+                          />
                         </Pressable>
                       );
                     })}
@@ -497,7 +496,7 @@ export default function EntryScreen() {
                 </ThemedText>
 
                 {/* Search */}
-                <View style={[styles.searchRow, { backgroundColor: theme.backgroundElement }]}>
+                <View style={[styles.searchRow, theme.glass]}>
                   <MaterialIcons name="search" size={20} color={theme.textSecondary} />
                   <TextInput
                     value={catSearch}
@@ -518,9 +517,9 @@ export default function EntryScreen() {
                 </View>
 
                 {addingCategory ? (
-                  <View style={[styles.addRow, { backgroundColor: theme.backgroundElement }]}>
+                  <View style={[styles.addRow, theme.glass]}>
                     <Pressable onPress={() => setIconTarget('new')} hitSlop={6}>
-                      <ThemedText style={styles.optionEmoji}>{newCategoryEmoji}</ThemedText>
+                      <MaterialIcons name={iconFor(newCategoryEmoji)} size={20} color={theme.text} />
                     </Pressable>
                     <TextInput
                       value={newCategory}
@@ -570,10 +569,10 @@ export default function EntryScreen() {
                             style={[
                               styles.optionRow,
                               styles.renameRow,
-                              { backgroundColor: theme.backgroundElement },
+                              theme.glass,
                             ]}>
                             <Pressable onPress={() => setIconTarget(cat)} hitSlop={8}>
-                              <ThemedText style={styles.optionEmoji}>{cat.emoji}</ThemedText>
+                              <MaterialIcons name={iconFor(cat.emoji)} size={20} color={theme.text} />
                             </Pressable>
                             <TextInput
                               value={renameText}
@@ -617,10 +616,10 @@ export default function EntryScreen() {
                             hitSlop={8}
                             style={({ pressed }) => [
                               styles.optionEmojiBtn,
-                              { backgroundColor: theme.backgroundElement },
+                              theme.glass,
                               pressed && { opacity: 0.6 },
                             ]}>
-                            <ThemedText style={styles.optionEmoji}>{cat.emoji}</ThemedText>
+                            <MaterialIcons name={iconFor(cat.emoji)} size={20} color={theme.text} />
                           </Pressable>
                           <ThemedText style={styles.optionName}>{cat.name}</ThemedText>
                           {selected && <MaterialIcons name="check" size={20} color={accent} />}
@@ -634,6 +633,16 @@ export default function EntryScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      <ActionSheet
+        visible={attachOpen}
+        title="Add receipt"
+        onClose={() => setAttachOpen(false)}
+        actions={[
+          { label: 'Take photo', icon: 'photo-camera', onPress: () => addFrom('camera') },
+          { label: 'Choose from gallery', icon: 'photo-library', onPress: () => addFrom('library') },
+        ]}
+      />
     </ThemedView>
   );
 }
@@ -644,9 +653,6 @@ const styles = StyleSheet.create({
   content: {
     padding: Spacing.four,
     gap: Spacing.three,
-  },
-  chipEmoji: {
-    fontSize: 18,
   },
   selectValue: {
     flexDirection: 'row',
@@ -688,11 +694,6 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     paddingVertical: Spacing.three,
     paddingHorizontal: Spacing.two,
-  },
-  optionEmoji: {
-    width: 28,
-    fontSize: 18,
-    textAlign: 'center',
   },
   renameRow: {
     borderRadius: Spacing.two,
@@ -751,15 +752,11 @@ const styles = StyleSheet.create({
   iconCell: {
     width: 52,
     height: 52,
-    borderRadius: 14,
+    borderRadius: Radius.medium,
     borderWidth: 2,
     borderColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  iconCellEmoji: {
-    fontSize: 24,
-    lineHeight: 30,
   },
   optionIcon: {
     width: 28,

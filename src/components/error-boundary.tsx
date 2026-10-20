@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Accents, Spacing } from '@/constants/theme';
+import { Accents, Radius, Spacing } from '@/constants/theme';
 import { getAccentKey } from '@/lib/appearance';
 
 const DANGER = '#e5484d';
@@ -94,7 +94,7 @@ const styles = StyleSheet.create({
   },
   button: {
     marginTop: Spacing.three,
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     paddingVertical: Spacing.three,
     alignItems: 'center',
   },

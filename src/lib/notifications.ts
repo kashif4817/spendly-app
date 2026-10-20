@@ -71,7 +71,7 @@ export async function applyReminder(enabled: boolean, hour: number, minute: numb
     await ensureAndroidChannel();
     await Notifications.scheduleNotificationAsync({
       content: {
-        title: 'Track today’s spending 💸',
+        title: 'Track today’s spending',
         body: 'Add what you spent today so your balance stays accurate.',
       },
       trigger: {

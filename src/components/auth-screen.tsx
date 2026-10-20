@@ -6,7 +6,7 @@ import { BrandMark } from '@/components/brand-mark';
 import { GoogleGlyph } from '@/components/google-glyph';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Spacing } from '@/constants/theme';
+import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { GOOGLE_CANCELLED } from '@/lib/google';
 import { useSync } from '@/sync/provider';
@@ -175,7 +175,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: Spacing.three,
     backgroundColor: '#ffffff',
-    borderRadius: 14,
+    borderRadius: Radius.medium,
     paddingVertical: Spacing.three,
     minHeight: 56,
     width: '100%',

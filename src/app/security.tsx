@@ -7,7 +7,7 @@ import { PinPad } from '@/components/pin-pad';
 import { confirm } from '@/lib/confirm';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   biometricAvailable,
@@ -116,7 +116,7 @@ export default function SecurityScreen() {
             unlock it when you open the app after leaving it.
           </ThemedText>
 
-          <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+          <View style={[styles.card, theme.glass]}>
             <View style={styles.row}>
               <ThemedText type="smallBold">App Lock</ThemedText>
               <ThemedText type="small" style={{ color: enabled ? theme.accent : theme.textSecondary }}>
@@ -213,7 +213,7 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.two,
   },
   card: {
-    borderRadius: 16,
+    borderRadius: Radius.card,
     padding: Spacing.three,
     gap: Spacing.three,
   },
@@ -223,7 +223,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   primaryBtn: {
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     paddingVertical: Spacing.three,
     alignItems: 'center',
     justifyContent: 'center',

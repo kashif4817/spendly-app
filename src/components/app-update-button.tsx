@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
-import { Spacing } from '@/constants/theme';
+import { Radius, Spacing } from '@/constants/theme';
 import { useAppRelease } from '@/hooks/use-app-release';
 import { useTheme } from '@/hooks/use-theme';
 import { INSTALLED_VERSION } from '@/lib/app-release';
@@ -42,7 +42,7 @@ export function AppUpdateButton() {
         hitSlop={4}
         style={({ pressed }) => [
           styles.button,
-          { backgroundColor: theme.backgroundElement },
+          theme.glass,
           pressed && styles.pressed,
         ]}
         accessibilityRole="button"
@@ -95,7 +95,7 @@ export function AppUpdateButton() {
                   onPress={() => setOpen(false)}
                   style={({ pressed }) => [
                     styles.btn,
-                    { backgroundColor: theme.backgroundElement },
+                    theme.glass,
                     pressed && styles.pressed,
                   ]}
                   accessibilityRole="button">
@@ -168,7 +168,7 @@ const styles = StyleSheet.create({
   headIcon: {
     width: 48,
     height: 48,
-    borderRadius: 14,
+    borderRadius: Radius.medium,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -181,7 +181,7 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   notes: {
-    borderRadius: 14,
+    borderRadius: Radius.medium,
     padding: Spacing.three,
   },
   notesScroll: {
@@ -193,7 +193,7 @@ const styles = StyleSheet.create({
   },
   btn: {
     flex: 1,
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     paddingVertical: Spacing.three,
     alignItems: 'center',
     justifyContent: 'center',

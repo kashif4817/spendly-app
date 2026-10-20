@@ -1,3 +1,4 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useRouter, type Href } from 'expo-router';
 import { useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native';
@@ -14,7 +15,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { TransactionRow } from '@/components/transaction-row';
 import { MoneyColors } from '@/constants/app';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { BottomTabInset, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
   getBudgetProgress,
   getDailyTotals,
@@ -22,7 +23,7 @@ import {
   getTransactionsByDay,
   OVERALL_BUDGET,
 } from '@/db';
-import { useCategoryEmoji, useQuery } from '@/db/hooks';
+import { useCategoryIcon, useQuery } from '@/db/hooks';
 import {
   addMonths,
   formatFullDate,
@@ -116,13 +117,14 @@ export default function ExpensesScreen() {
 
 /** Today's entries, with the day's balance and the month budget above them. */
 function TodayTab() {
+  const theme = useTheme();
   const router = useRouter();
   const day = todayKey();
 
   const entries = useQuery(() => getTransactionsByDay(day), [day]);
   const totals = useQuery(() => getTotals(day, day), [day]);
   const budgets = useQuery(() => getBudgetProgress(monthStart(day), monthEnd(day)), [day]);
-  const emojiFor = useCategoryEmoji();
+  const iconFor = useCategoryIcon();
 
   const overallBudget = budgets.find((b) => b.category === OVERALL_BUDGET);
 
@@ -139,7 +141,8 @@ function TodayTab() {
             <Pressable onPress={() => router.push('/budgets')}>
               <ThemedView type="backgroundElement" style={styles.budgetCard}>
                 <BudgetBar
-                  label={`🎯  ${formatMonth(day)} budget`}
+                  label={`${formatMonth(day)} budget`}
+                  icon="donut-large"
                   spent={overallBudget.spent}
                   budget={overallBudget.budget}
                 />
@@ -156,14 +159,14 @@ function TodayTab() {
       renderItem={({ item }) => (
         <TransactionRow
           transaction={item}
-          emoji={emojiFor(item.category, item.type)}
+          icon={iconFor(item.category, item.type)}
           showTime
           onPress={() => router.push({ pathname: '/entry', params: { id: item.id } })}
         />
       )}
       ListEmptyComponent={
         <View style={styles.empty}>
-          <ThemedText style={styles.emptyEmoji}>🧾</ThemedText>
+          <MaterialIcons name="receipt-long" size={34} color={theme.textSecondary} style={styles.emptyIcon} />
           <ThemedText type="smallBold">No entries yet today</ThemedText>
           <ThemedText type="small" themeColor="textSecondary" style={styles.emptyHint}>
             Tap “＋ Add Expense” to record money in or out.
@@ -273,7 +276,7 @@ const styles = StyleSheet.create({
   },
   budgetCard: {
     marginTop: Spacing.two,
-    borderRadius: 20,
+    borderRadius: Radius.card,
     padding: Spacing.three,
   },
   sectionTitle: {
@@ -285,9 +288,8 @@ const styles = StyleSheet.create({
     gap: Spacing.one,
     paddingVertical: Spacing.six,
   },
-  emptyEmoji: {
-    fontSize: 40,
-    marginBottom: Spacing.one,
+  emptyIcon: {
+    marginBottom: Spacing.two,
   },
   emptyHint: {
     textAlign: 'center',
@@ -295,7 +297,7 @@ const styles = StyleSheet.create({
   summary: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 20,
+    borderRadius: Radius.card,
     padding: Spacing.three,
   },
   stat: {

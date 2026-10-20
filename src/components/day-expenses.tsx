@@ -4,9 +4,9 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { TransactionRow } from '@/components/transaction-row';
 import { MoneyColors } from '@/constants/app';
-import { Spacing } from '@/constants/theme';
+import { Radius, Spacing } from '@/constants/theme';
 import type { Transaction } from '@/db';
-import { useCategoryEmoji } from '@/db/hooks';
+import { useCategoryIcon } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
 import { formatRelativeDay } from '@/lib/date';
 import { formatMoney } from '@/lib/money';
@@ -26,7 +26,7 @@ type Props = {
  */
 export function DayExpenses({ day, entries, onPressEntry }: Props) {
   const theme = useTheme();
-  const emojiFor = useCategoryEmoji();
+  const iconFor = useCategoryIcon();
 
   let spent = 0;
   let received = 0;
@@ -69,7 +69,7 @@ export function DayExpenses({ day, entries, onPressEntry }: Props) {
               <TransactionRow
                 key={tx.id}
                 transaction={tx}
-                emoji={emojiFor(tx.category, tx.type)}
+                icon={iconFor(tx.category, tx.type)}
                 showTime
                 inset
                 onPress={onPressEntry ? () => onPressEntry(tx.id) : undefined}
@@ -88,7 +88,7 @@ export function DayExpenses({ day, entries, onPressEntry }: Props) {
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 20,
+    borderRadius: Radius.card,
     padding: Spacing.three,
   },
   header: {

@@ -1,0 +1,806 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spendly · Aurora</title>
+<style>
+  /* ------------------------------------------------------------------
+     Spendly — full glassmorphism study.
+     Every surface is glass: cards, tiles, chips, buttons, tags, badges,
+     the tab bar and the FAB. Real screens, real numbers.
+     Toggle light/dark at the top right.
+     ------------------------------------------------------------------ */
+
+  /* These are the real tokens from src/constants/theme.ts + constants/app.ts. */
+  :root {
+    --indigo:  #7C5CFF;
+    --azure:   #3B82F6;
+    --fuchsia: #C04DFF;
+    --amber:   #FF9361;
+    --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  /* ---- LIGHT GLASS ---- */
+  body[data-theme="light"] {
+    --page-a: #E8ECFD;
+    --page-b: #E4E6FA;
+    --page-c: #F0E8FA;
+    --mesh-1: rgba(124,92,255,0.40);
+    --mesh-2: rgba(59,130,246,0.34);
+    --mesh-3: rgba(192,77,255,0.26);
+    --mesh-4: rgba(255,147,97,0.24);
+
+    --glass:        rgba(255,255,255,0.52);
+    --glass-strong: rgba(255,255,255,0.68);
+    --glass-weak:   rgba(255,255,255,0.34);
+    --edge:         rgba(255,255,255,0.80);
+    --edge-soft:    rgba(255,255,255,0.62);
+    --sheen:        rgba(255,255,255,0.85);
+    --shadow:       0 6px 24px rgba(23,18,67,0.10);
+
+    --ink:    #171243;
+    --ink-2:  #433C70;
+    --ink-3:  #524B80;
+    --money-in:  #0B6FB8;
+    --money-out: #C0325E;
+    --accent:    #6A45F5;
+    --accent-tint: #5B3FD4;
+    --tabbar: rgba(255,255,255,0.80);
+  }
+
+  /* ---- DARK GLASS ---- */
+  body[data-theme="dark"] {
+    --page-a: #09071A;
+    --page-b: #0D0B24;
+    --page-c: #140C22;
+    --mesh-1: rgba(124,92,255,0.38);
+    --mesh-2: rgba(59,130,246,0.32);
+    --mesh-3: rgba(192,77,255,0.30);
+    --mesh-4: rgba(255,147,97,0.16);
+
+    --glass:        rgba(255,255,255,0.085);
+    --glass-strong: rgba(255,255,255,0.13);
+    --glass-weak:   rgba(255,255,255,0.055);
+    --edge:         rgba(255,255,255,0.20);
+    --edge-soft:    rgba(255,255,255,0.14);
+    --sheen:        rgba(255,255,255,0.20);
+    --shadow:       0 6px 24px rgba(0,0,0,0.34);
+
+    --ink:    #F2F0FF;
+    --ink-2:  #C6C0E4;
+    --ink-3:  #A7A0CC;
+    --money-in:  #7CC9FF;
+    --money-out: #FF8FAB;
+    --accent:    #6A45F5;
+    --accent-tint: #B4A1FF;
+    --tabbar: rgba(14,11,34,0.82);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: var(--font);
+    background: #0b1020;
+    color: #e8edf7;
+    padding: 40px 16px 80px;
+    transition: background .3s ease;
+  }
+  body[data-theme="light"] { background: #e7eef9; color: #0B1B3D; }
+
+  /* ================= page chrome ================= */
+  .top {
+    max-width: 1700px;
+    margin: 0 auto 36px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    align-items: flex-end;
+    justify-content: space-between;
+  }
+  .top h1 { margin: 0 0 6px; font-size: 30px; letter-spacing: -0.6px; }
+  .top p  { margin: 0; font-size: 14px; opacity: .72; max-width: 640px; line-height: 1.55; }
+
+  .switch {
+    display: inline-flex;
+    padding: 4px;
+    border-radius: 999px;
+    background: rgba(127,127,127,.18);
+    border: 1px solid rgba(127,127,127,.25);
+  }
+  .switch button {
+    font: 600 13px/1 var(--font);
+    color: inherit;
+    background: none;
+    border: 0;
+    padding: 9px 18px;
+    border-radius: 999px;
+    cursor: pointer;
+    opacity: .6;
+  }
+  .switch button[aria-pressed="true"] {
+    background: rgba(255,255,255,.9);
+    color: #0B1B3D;
+    opacity: 1;
+  }
+
+  .rail {
+    max-width: 1700px;
+    margin: 0 auto;
+    display: flex;
+    gap: 40px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .slot { width: 390px; }
+  .slot > figcaption {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .9px;
+    text-transform: uppercase;
+    opacity: .55;
+    margin: 0 0 12px 4px;
+  }
+
+  /* ================= the phone ================= */
+  .phone {
+    position: relative;
+    width: 390px;
+    height: 844px;
+    border-radius: 42px;
+    overflow: hidden;
+    isolation: isolate;
+    border: 1px solid rgba(255,255,255,.14);
+    box-shadow: 0 30px 70px rgba(0,0,0,.35), 0 2px 8px rgba(0,0,0,.2);
+    color: var(--ink);
+    font-size: 15px;
+  }
+
+  /* The mesh behind the glass. Without this there is nothing to see
+     through — which is the whole argument about flat backgrounds. */
+  .phone::before {
+    content: "";
+    position: absolute;
+    inset: -20%;
+    z-index: 0;
+    background:
+      radial-gradient(42% 36% at 12% 8%,   var(--mesh-1) 0%, transparent 70%),
+      radial-gradient(48% 40% at 88% 18%,  var(--mesh-2) 0%, transparent 72%),
+      radial-gradient(52% 44% at 78% 82%,  var(--mesh-3) 0%, transparent 74%),
+      radial-gradient(40% 34% at 18% 92%,  var(--mesh-4) 0%, transparent 70%),
+      linear-gradient(160deg, var(--page-a) 0%, var(--page-b) 52%, var(--page-c) 100%);
+    filter: saturate(118%);
+  }
+
+  .screen {
+    position: relative;
+    z-index: 1;
+    height: 100%;
+    overflow: hidden;
+    padding: 0 18px;
+  }
+
+  /* ================= the glass recipe ================= */
+  .g {
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(22px) saturate(165%);
+    backdrop-filter: blur(22px) saturate(165%);
+    border: 1px solid var(--edge-soft);
+    box-shadow: var(--shadow), inset 0 1px 0 var(--sheen);
+  }
+  .g-strong {
+    background: var(--glass-strong);
+    -webkit-backdrop-filter: blur(30px) saturate(175%);
+    backdrop-filter: blur(30px) saturate(175%);
+    border: 1px solid var(--edge);
+    box-shadow: var(--shadow), inset 0 1px 0 var(--sheen);
+  }
+  .g-weak {
+    background: var(--glass-weak);
+    -webkit-backdrop-filter: blur(14px) saturate(150%);
+    backdrop-filter: blur(14px) saturate(150%);
+    border: 1px solid var(--edge-soft);
+  }
+
+  /* ================= shared bits ================= */
+  .hdr { padding-top: 26px; }
+  .hdr-row { display: flex; align-items: center; gap: 10px; }
+  .hdr-row h2 { margin: 0; font-size: 31px; font-weight: 800; letter-spacing: -0.9px; flex: 1; }
+  .hdr-sub { margin: 4px 0 0; font-size: 13px; color: var(--ink-3); }
+
+  .icon-btn {
+    width: 44px; height: 44px;
+    border-radius: 999px;
+    display: grid; place-items: center;
+    flex: none;
+    cursor: pointer;
+  }
+  .icon-btn svg { width: 21px; height: 21px; stroke: var(--accent-tint); fill: none; stroke-width: 1.9; }
+  
+
+  .tiles { display: flex; gap: 10px; margin-top: 16px; }
+  .tile { flex: 1; border-radius: 20px; padding: 14px 16px; }
+  .tile .lab { font-size: 12.5px; color: var(--ink-3); }
+  .tile .val { font-size: 21px; font-weight: 800; margin-top: 3px; letter-spacing: -.4px; }
+  .val.in  { color: var(--money-in); }
+  .val.out { color: var(--money-out); }
+
+  .searchrow { display: flex; gap: 10px; margin-top: 12px; }
+  .search {
+    flex: 1; height: 46px; border-radius: 14px;
+    display: flex; align-items: center; gap: 10px; padding: 0 14px;
+    font-size: 14.5px; color: var(--ink-3);
+  }
+  .search svg { width: 18px; height: 18px; stroke: var(--ink-3); fill: none; stroke-width: 2; }
+  .viewsw { display: flex; border-radius: 14px; padding: 4px; gap: 3px; }
+  .viewsw span {
+    width: 40px; border-radius: 10px;
+    display: grid; place-items: center; cursor: pointer;
+  }
+  .viewsw span.on { background: var(--glass-strong); box-shadow: inset 0 1px 0 var(--sheen); }
+  .viewsw svg { width: 18px; height: 18px; stroke: var(--ink-3); fill: none; stroke-width: 2; }
+  .viewsw span.on svg { stroke: var(--accent-tint); }
+  
+
+  .chips { display: flex; gap: 8px; margin-top: 12px; overflow: hidden; }
+  .chip {
+    border-radius: 999px; padding: 8px 14px;
+    font-size: 12.5px; font-weight: 700; white-space: nowrap;
+    color: var(--ink-2); cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .chip.on {
+    background: var(--accent);
+    color: #fff;
+    border-color: rgba(255,255,255,.45);
+    box-shadow: 0 4px 14px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.45);
+  }
+  .chip svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+  .seclab {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; font-weight: 800; letter-spacing: .9px;
+    text-transform: uppercase; color: var(--ink-3);
+    margin: 18px 0 9px 2px;
+  }
+  .seclab svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+  /* ---- avatar + the shared badge ---- */
+  .av { position: relative; flex: none; }
+  .av .disc {
+    border-radius: 999px;
+    display: grid; place-items: center;
+    font-weight: 800;
+    background: var(--glass-strong);
+    border: 1px solid var(--edge);
+    box-shadow: inset 0 1px 0 var(--sheen);
+  }
+  .av .badge {
+    position: absolute; right: -3px; bottom: -3px;
+    border-radius: 999px; display: grid; place-items: center;
+    background: var(--accent);
+    border: 2px solid rgba(255,255,255,.55);
+    box-shadow: 0 2px 8px rgba(0,0,0,.35);
+  }
+  .av .badge svg { stroke: #fff; fill: none; stroke-width: 2.3; }
+
+  /* ---- grid tiles ---- */
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+  .ptile {
+    position: relative;
+    border-radius: 22px;
+    padding: 20px 12px 18px;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+  }
+  .ptile .pin { position: absolute; top: 11px; right: 11px; }
+  .ptile .pin svg { width: 13px; height: 13px; stroke: var(--accent-tint); fill: none; stroke-width: 2; }
+  
+  .ptile .disc { width: 48px; height: 48px; font-size: 21px; }
+  .ptile .badge { width: 20px; height: 20px; }
+  .ptile .badge svg { width: 12px; height: 12px; }
+  .ptile .nm  { margin-top: 12px; font-size: 15px; font-weight: 700; }
+  .ptile .st  { font-size: 12.5px; color: var(--ink-3); }
+  .ptile .amt { margin-top: 7px; font-size: 18px; font-weight: 800; letter-spacing: -.3px; }
+
+  /* ---- list rows ---- */
+  .prow {
+    display: flex; align-items: center; gap: 13px;
+    border-radius: 18px; padding: 13px 14px; margin-bottom: 9px;
+  }
+  .prow .disc { width: 46px; height: 46px; font-size: 20px; }
+  .prow .badge { width: 19px; height: 19px; }
+  .prow .badge svg { width: 11px; height: 11px; }
+  .prow .mid { flex: 1; min-width: 0; }
+  .prow .nmrow { display: flex; align-items: center; gap: 5px; }
+  .prow .nmrow svg { width: 13px; height: 13px; stroke: var(--accent-tint); fill: none; stroke-width: 2; flex: none; }
+  
+  .prow .nm { font-size: 15.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .prow .st { font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
+  .prow .rt { display: flex; align-items: center; gap: 8px; flex: none; }
+  .prow .amt { font-size: 15.5px; font-weight: 800; }
+  .dots { width: 4px; height: 4px; border-radius: 9px; background: var(--ink-3); box-shadow: 0 -6px 0 var(--ink-3), 0 6px 0 var(--ink-3); margin-right: 3px; }
+
+  /* ---- FAB + tab bar ---- */
+  .fab {
+    position: absolute; right: 18px; bottom: 96px; z-index: 4;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 14px 22px; border-radius: 999px;
+    font-size: 16px; font-weight: 800; color: #fff;
+    background: var(--accent);
+    border: 1px solid rgba(255,255,255,.45);
+    -webkit-backdrop-filter: blur(18px) saturate(170%);
+    backdrop-filter: blur(18px) saturate(170%);
+    box-shadow: 0 10px 28px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.45);
+    cursor: pointer;
+  }
+  .fab svg { width: 19px; height: 19px; stroke: #fff; fill: none; stroke-width: 2.6; }
+
+  .tabbar {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 5;
+    height: 82px; padding: 11px 6px 0;
+    display: flex;
+    background: var(--tabbar);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    backdrop-filter: blur(30px) saturate(180%);
+    border-top: 1px solid var(--edge);
+    box-shadow: inset 0 1px 0 var(--sheen);
+  }
+  .tabbar div {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 5px;
+    font-size: 10.5px; font-weight: 700; color: var(--ink-3);
+  }
+  .tabbar svg { width: 22px; height: 22px; stroke: var(--ink-3); fill: none; stroke-width: 1.9; }
+  .tabbar div.on { color: var(--accent-tint); }
+  .tabbar div.on svg { stroke: var(--accent-tint); }
+  body[data-theme="dark"] .tabbar div.on,
+  body[data-theme="dark"] .tabbar div.on svg { color: #3FD9BA; stroke: var(--accent-tint); }
+
+  /* ================= shared book ================= */
+  .navbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 28px 0 16px;
+  }
+  .navbar svg { width: 22px; height: 22px; stroke: var(--ink); fill: none; stroke-width: 2; cursor: pointer; }
+  .navbar h3 { margin: 0; font-size: 19px; font-weight: 700; flex: 1; }
+
+  .balance {
+    border-radius: 26px; padding: 16px 20px 22px;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  .statuschip {
+    display: inline-flex; align-items: center; gap: 7px;
+    border-radius: 999px; padding: 6px 13px; margin-bottom: 12px;
+    font-size: 12px; color: var(--ink-2);
+  }
+  .statuschip svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+  .balance .who  { font-size: 13px; color: var(--ink-3); }
+  .balance .big  { font-size: 44px; font-weight: 800; letter-spacing: -1.4px; line-height: 1.12; margin: 2px 0; }
+  .balance .term { font-size: 12.5px; color: var(--ink-3); }
+
+  .acts { display: flex; gap: 10px; margin-top: 16px; }
+  .act {
+    flex: 1; min-height: 54px; border-radius: 17px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    font-size: 15px; font-weight: 800; cursor: pointer;
+  }
+  .act svg { width: 17px; height: 17px; fill: none; stroke-width: 2.8; }
+  .act.in  { color: var(--money-in);  border-color: rgba(46,144,250,.65); }
+  .act.in svg  { stroke: var(--money-in); }
+  .act.out { color: var(--money-out); border-color: rgba(242,61,109,.6); }
+  .act.out svg { stroke: var(--money-out); }
+
+  .settle {
+    margin-top: 10px; min-height: 46px; border-radius: 17px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    font-size: 13.5px; font-weight: 700; color: var(--ink-2); cursor: pointer;
+  }
+  .settle svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+  .stmt-h {
+    font-size: 11px; font-weight: 800; letter-spacing: 1px;
+    text-transform: uppercase; color: var(--ink-3);
+    margin: 22px 0 10px 2px;
+  }
+
+  /* day card */
+  .day { border-radius: 20px; overflow: hidden; margin-bottom: 12px; }
+  .day-h {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 13px 16px 9px;
+    font-size: 11px; font-weight: 800; letter-spacing: .8px;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  .day-h .net { font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+  .ent {
+    display: flex; align-items: center; gap: 12px;
+    padding: 13px 16px;
+    border-top: 1px solid var(--edge-soft);
+  }
+  .ent .mid { flex: 1; min-width: 0; }
+  .ent .who { font-size: 14.5px; font-weight: 700; }
+  .ent .note { font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
+  .ent .amt { font-size: 15px; font-weight: 800; flex: none; }
+  .amt.in  { color: var(--money-in); }
+  .amt.out { color: var(--money-out); }
+
+  .fade {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 90px; z-index: 3;
+    pointer-events: none;
+  }
+
+  .note-under {
+    max-width: 1700px;
+    margin: 44px auto 0;
+    font-size: 14px;
+    line-height: 1.65;
+    opacity: .78;
+  }
+  .note-under strong { opacity: 1; }
+  .note-under ul { padding-left: 20px; }
+  .note-under li { margin-bottom: 7px; }
+</style>
+</head>
+<body data-theme="dark">
+
+<div class="top">
+  <div>
+    <h1>Spendly — Aurora</h1>
+    <p>The palette now shipping in the app, taken from <code>src/constants/theme.ts</code>: indigo ground, violet / azure / fuchsia mesh, every surface glass. No green anywhere — money direction is azure in, rose out, which is colourblind-safe in a way green and red never were.</p>
+  </div>
+  <div class="switch" role="group" aria-label="Theme">
+    <button type="button" id="btn-dark"  aria-pressed="true">Dark glass</button>
+    <button type="button" id="btn-light" aria-pressed="false">Light glass</button>
+  </div>
+</div>
+
+<div class="rail">
+
+  <!-- ============== 1. LOANS — GRID ============== -->
+  <figure class="slot">
+    <figcaption>Loans · grid</figcaption>
+    <div class="phone">
+      <div class="screen">
+        <div class="hdr">
+          <div class="hdr-row">
+            <div>
+              <h2>Loans</h2>
+            </div>
+            <div class="icon-btn g" title="Shared book">
+              <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.3"/><path d="M3 19c0-3 2.7-5 6-5s6 2 6 5"/><path d="M16 14.5c2.5.3 4.3 2.1 4.3 4.5"/></svg>
+            </div>
+            <div class="icon-btn g" title="Add person">
+              <svg viewBox="0 0 24 24"><circle cx="10" cy="8" r="3.4"/><path d="M3.5 19.5c0-3.3 2.9-5.6 6.5-5.6 1.3 0 2.5.3 3.5.8"/><path d="M18 14.5v6M15 17.5h6"/></svg>
+            </div>
+          </div>
+          <p class="hdr-sub">Who owes you, and who you owe</p>
+        </div>
+
+        <div class="tiles">
+          <div class="tile g">
+            <div class="lab">You’ll get</div>
+            <div class="val in">PKR 730</div>
+          </div>
+          <div class="tile g">
+            <div class="lab">You’ll pay</div>
+            <div class="val out">PKR 3,275</div>
+          </div>
+        </div>
+
+        <div class="searchrow">
+          <div class="search g">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+            Search by name
+          </div>
+          <div class="viewsw g">
+            <span><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="5.5" rx="2"/><rect x="3" y="13.5" width="18" height="5.5" rx="2"/></svg></span>
+            <span class="on"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.8"/><rect x="13" y="4" width="7" height="7" rx="1.8"/><rect x="4" y="13" width="7" height="7" rx="1.8"/><rect x="13" y="13" width="7" height="7" rx="1.8"/></svg></span>
+          </div>
+        </div>
+
+        <div class="chips">
+          <div class="chip on g">All 4</div>
+          <div class="chip g"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4.5" rx="1.5"/><path d="M5 8.5V19h14V8.5"/><path d="M10 12.5h4"/></svg>Archived 10</div>
+          <div class="chip g">People 2</div>
+          <div class="chip g">Sha</div>
+        </div>
+
+        <div class="grid">
+          <div class="ptile g">
+            <div class="pin"><svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6 4 3v2H6v-2l4-3-1-6z"/><path d="M12 14v7"/></svg></div>
+            <div class="av">
+              <div class="disc" style="color:var(--money-out)">J</div>
+              <div class="badge"><svg viewBox="0 0 24 24"><circle cx="9" cy="9" r="3"/><path d="M3.5 18.5c0-2.6 2.4-4.3 5.5-4.3s5.5 1.7 5.5 4.3"/><circle cx="17" cy="10" r="2.2"/></svg></div>
+            </div>
+            <div class="nm">Joun-kashif</div>
+            <div class="st">You owe</div>
+            <div class="amt" style="color:var(--money-out)">PKR 650</div>
+          </div>
+
+          <div class="ptile g">
+            <div class="pin"><svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6 4 3v2H6v-2l4-3-1-6z"/><path d="M12 14v7"/></svg></div>
+            <div class="av">
+              <div class="disc" style="color:var(--money-out)">K</div>
+              <div class="badge"><svg viewBox="0 0 24 24"><circle cx="9" cy="9" r="3"/><path d="M3.5 18.5c0-2.6 2.4-4.3 5.5-4.3s5.5 1.7 5.5 4.3"/><circle cx="17" cy="10" r="2.2"/></svg></div>
+            </div>
+            <div class="nm">K-S</div>
+            <div class="st">You owe</div>
+            <div class="amt" style="color:var(--money-out)">PKR 2,625</div>
+          </div>
+
+          <div class="ptile g">
+            <div class="av"><div class="disc" style="color:var(--money-in)">S</div></div>
+            <div class="nm">Sir</div>
+            <div class="st">Owes you</div>
+            <div class="amt" style="color:var(--money-in)">PKR 730</div>
+          </div>
+
+          <div class="ptile g">
+            <div class="av"><div class="disc" style="color:var(--ink-3)">S</div></div>
+            <div class="nm">Sohail</div>
+            <div class="st">Settled up</div>
+            <div class="amt" style="color:var(--ink-3)">PKR 0</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="fab"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add</div>
+
+      <div class="tabbar">
+        <div><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>Home</div>
+        <div><svg viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3z"/><path d="M9 8h6M9 12h6"/></svg>Expenses</div>
+        <div class="on"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.3"/><path d="M3 19c0-3 2.7-5 6-5s6 2 6 5"/><path d="M16 14.5c2.5.3 4.3 2.1 4.3 4.5"/></svg>Loans</div>
+        <div><svg viewBox="0 0 24 24"><path d="M5 20V11M12 20V5M19 20v-6"/></svg>Reports</div>
+        <div><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.5M12 18.5V21M21 12h-2.5M5.5 12H3M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8M18.4 18.4l-1.8-1.8M7.4 7.4 5.6 5.6"/></svg>Settings</div>
+      </div>
+    </div>
+  </figure>
+
+  <!-- ============== 2. LOANS — LIST ============== -->
+  <figure class="slot">
+    <figcaption>Loans · list</figcaption>
+    <div class="phone">
+      <div class="screen">
+        <div class="hdr">
+          <div class="hdr-row">
+            <div><h2>Loans</h2></div>
+            <div class="icon-btn g">
+              <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.3"/><path d="M3 19c0-3 2.7-5 6-5s6 2 6 5"/><path d="M16 14.5c2.5.3 4.3 2.1 4.3 4.5"/></svg>
+            </div>
+            <div class="icon-btn g">
+              <svg viewBox="0 0 24 24"><circle cx="10" cy="8" r="3.4"/><path d="M3.5 19.5c0-3.3 2.9-5.6 6.5-5.6 1.3 0 2.5.3 3.5.8"/><path d="M18 14.5v6M15 17.5h6"/></svg>
+            </div>
+          </div>
+          <p class="hdr-sub">Who owes you, and who you owe</p>
+        </div>
+
+        <div class="tiles">
+          <div class="tile g">
+            <div class="lab">You’ll get</div>
+            <div class="val in">PKR 730</div>
+          </div>
+          <div class="tile g">
+            <div class="lab">You’ll pay</div>
+            <div class="val out">PKR 3,275</div>
+          </div>
+        </div>
+
+        <div class="searchrow">
+          <div class="search g">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+            Search by name
+          </div>
+          <div class="viewsw g">
+            <span class="on"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="5.5" rx="2"/><rect x="3" y="13.5" width="18" height="5.5" rx="2"/></svg></span>
+            <span><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.8"/><rect x="13" y="4" width="7" height="7" rx="1.8"/><rect x="4" y="13" width="7" height="7" rx="1.8"/><rect x="13" y="13" width="7" height="7" rx="1.8"/></svg></span>
+          </div>
+        </div>
+
+        <div class="chips">
+          <div class="chip on g">All 4</div>
+          <div class="chip g"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4.5" rx="1.5"/><path d="M5 8.5V19h14V8.5"/><path d="M10 12.5h4"/></svg>Archived 10</div>
+          <div class="chip g">People 2</div>
+          <div class="chip g">Sha</div>
+        </div>
+
+        <div class="seclab">
+          <svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6 4 3v2H6v-2l4-3-1-6z"/><path d="M12 14v7"/></svg>
+          Pinned
+        </div>
+
+        <div class="prow g">
+          <div class="av">
+            <div class="disc" style="color:var(--money-out)">J</div>
+            <div class="badge"><svg viewBox="0 0 24 24"><circle cx="9" cy="9" r="3"/><path d="M3.5 18.5c0-2.6 2.4-4.3 5.5-4.3s5.5 1.7 5.5 4.3"/><circle cx="17" cy="10" r="2.2"/></svg></div>
+          </div>
+          <div class="mid">
+            <div class="nmrow">
+              <svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6 4 3v2H6v-2l4-3-1-6z"/><path d="M12 14v7"/></svg>
+              <span class="nm">Joun-kashif</span>
+            </div>
+            <div class="st">You owe · Today</div>
+          </div>
+          <div class="rt">
+            <span class="amt" style="color:var(--money-out)">PKR 650</span>
+            <span class="dots"></span>
+          </div>
+        </div>
+
+        <div class="prow g">
+          <div class="av">
+            <div class="disc" style="color:var(--money-out)">K</div>
+            <div class="badge"><svg viewBox="0 0 24 24"><circle cx="9" cy="9" r="3"/><path d="M3.5 18.5c0-2.6 2.4-4.3 5.5-4.3s5.5 1.7 5.5 4.3"/><circle cx="17" cy="10" r="2.2"/></svg></div>
+          </div>
+          <div class="mid">
+            <div class="nmrow">
+              <svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6 4 3v2H6v-2l4-3-1-6z"/><path d="M12 14v7"/></svg>
+              <span class="nm">K-S</span>
+            </div>
+            <div class="st">You owe · Today</div>
+          </div>
+          <div class="rt">
+            <span class="amt" style="color:var(--money-out)">PKR 2,625</span>
+            <span class="dots"></span>
+          </div>
+        </div>
+
+        <div class="seclab">
+          <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.3"/><path d="M3 19c0-3 2.7-5 6-5s6 2 6 5"/></svg>
+          Everyone else
+        </div>
+
+        <div class="prow g">
+          <div class="av"><div class="disc" style="color:var(--money-in)">S</div></div>
+          <div class="mid">
+            <div class="nmrow"><span class="nm">Sir</span></div>
+            <div class="st">Owes you · Sat, 18 Oct 2026</div>
+          </div>
+          <div class="rt">
+            <span class="amt" style="color:var(--money-in)">PKR 730</span>
+            <span class="dots"></span>
+          </div>
+        </div>
+
+        <div class="prow g">
+          <div class="av"><div class="disc" style="color:var(--ink-3)">S</div></div>
+          <div class="mid">
+            <div class="nmrow"><span class="nm">Sohail</span></div>
+            <div class="st">Settled up · Thu, 8 Oct 2026</div>
+          </div>
+          <div class="rt">
+            <span class="amt" style="color:var(--ink-3)">PKR 0</span>
+            <span class="dots"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="fab"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add</div>
+
+      <div class="tabbar">
+        <div><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>Home</div>
+        <div><svg viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3z"/><path d="M9 8h6M9 12h6"/></svg>Expenses</div>
+        <div class="on"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.3"/><path d="M3 19c0-3 2.7-5 6-5s6 2 6 5"/><path d="M16 14.5c2.5.3 4.3 2.1 4.3 4.5"/></svg>Loans</div>
+        <div><svg viewBox="0 0 24 24"><path d="M5 20V11M12 20V5M19 20v-6"/></svg>Reports</div>
+        <div><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.5M12 18.5V21M21 12h-2.5M5.5 12H3M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8M18.4 18.4l-1.8-1.8M7.4 7.4 5.6 5.6"/></svg>Settings</div>
+      </div>
+    </div>
+  </figure>
+
+  <!-- ============== 3. SHARED BOOK ============== -->
+  <figure class="slot">
+    <figcaption>Shared book · K-S</figcaption>
+    <div class="phone">
+      <div class="screen">
+        <div class="navbar">
+          <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+          <h3>K-S</h3>
+          <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8"/><path d="M20 4v4h-4"/></svg>
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="12" cy="19" r="1.3"/></svg>
+        </div>
+
+        <div class="balance g-strong">
+          <div class="statuschip g-weak">
+            <svg viewBox="0 0 24 24"><path d="M7 17.5a4 4 0 0 1 .6-7.95 5.5 5.5 0 0 1 10.6.95A3.5 3.5 0 0 1 17.5 17.5z"/><path d="M9.5 13.5l2 2 3.5-3.8"/></svg>
+            Up to date with the shared book
+          </div>
+          <div class="who">You owe Saeed Hussain</div>
+          <div class="big" style="color:var(--money-out)">PKR 2,625</div>
+          <div class="term">Payable</div>
+        </div>
+
+        <div class="acts">
+          <div class="act in g">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            I paid
+          </div>
+          <div class="act out g">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            Saeed paid
+          </div>
+        </div>
+
+        <div class="settle g-weak">
+          <svg viewBox="0 0 24 24"><path d="M3 12l4-3 4 2 3-2 3 1.5 4-2.5"/><path d="M7 15l3 3 4-4 3 2"/></svg>
+          Settle up
+        </div>
+
+        <div class="stmt-h">Statement</div>
+
+        <div class="day g">
+          <div class="day-h">
+            Today
+            <span class="net">+PKR 230</span>
+          </div>
+          <div class="ent">
+            <div class="mid">
+              <div class="who">You paid</div>
+              <div class="note">Friends lunch</div>
+            </div>
+            <div class="amt in">+PKR 120</div>
+          </div>
+          <div class="ent">
+            <div class="mid">
+              <div class="who">You paid</div>
+              <div class="note">Chaii</div>
+            </div>
+            <div class="amt in">+PKR 110</div>
+          </div>
+        </div>
+
+        <div class="day g">
+          <div class="day-h">
+            Yesterday
+            <span class="net">−PKR 400</span>
+          </div>
+          <div class="ent">
+            <div class="mid">
+              <div class="who">Saeed Hussain paid</div>
+              <div class="note">Dinner on friends</div>
+            </div>
+            <div class="amt out">−PKR 200</div>
+          </div>
+          <div class="ent">
+            <div class="mid">
+              <div class="who">You paid</div>
+              <div class="note">Spiral chips</div>
+            </div>
+            <div class="amt in">+PKR 220</div>
+          </div>
+          <div class="ent">
+            <div class="mid">
+              <div class="who">Saeed Hussain paid</div>
+              <div class="note">Petrol</div>
+            </div>
+            <div class="amt out">−PKR 150</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </figure>
+
+</div>
+
+<div class="note-under">
+  <p><strong>This is what is in the app now.</strong> The colours, glass depths and corner radii on this page are copied from the real tokens, so what you see here is what builds.</p>
+  <ul>
+    <li><strong>Switch to Light glass.</strong> That is the harder theme for this material &mdash; check the stat tiles and the grey &ldquo;Owes you &middot; Sat, 18 Oct&rdquo; line still read comfortably for you.</li>
+    <li><strong>Money is azure and rose now, not green and red.</strong> Worth sitting with for a minute: it is the one change that alters what a number <em>means</em> at a glance.</li>
+    <li><strong>Two things this page cannot show.</strong> The app uses layered translucency rather than true backdrop blur, because React Native has no <code>backdrop-filter</code> &mdash; over a smooth mesh the difference is very small. And the Spendly logo is still a PNG with a teal arrow, which needs a new asset from you.</li>
+  </ul>
+</div>
+
+<script>
+  var body = document.body;
+  var dark = document.getElementById('btn-dark');
+  var light = document.getElementById('btn-light');
+  function set(theme) {
+    body.setAttribute('data-theme', theme);
+    dark.setAttribute('aria-pressed', String(theme === 'dark'));
+    light.setAttribute('aria-pressed', String(theme === 'light'));
+  }
+  dark.addEventListener('click', function () { set('dark'); });
+  light.addEventListener('click', function () { set('light'); });
+</script>
+
+</body>
+</html>

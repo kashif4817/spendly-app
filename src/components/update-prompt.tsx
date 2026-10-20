@@ -2,11 +2,10 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import * as Updates from 'expo-updates';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Pressable, StyleSheet, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
-import { BottomTabInset, Spacing } from '@/constants/theme';
+import { BottomTabInset, Radius, Spacing } from '@/constants/theme';
 
 /**
  * Floating banner offering an over-the-air update once one has downloaded.
@@ -20,7 +19,6 @@ export function UpdatePrompt() {
   const { isDownloading, isUpdatePending } = Updates.useUpdates();
   const [dismissed, setDismissed] = useState(false);
   const checking = useRef(false);
-  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     // Updates are stripped from Expo Go and dev builds, where these calls throw
@@ -57,19 +55,14 @@ export function UpdatePrompt() {
         styles.banner,
         {
           backgroundColor: theme.accent,
-          bottom: insets.bottom + BottomTabInset + Spacing.five + Spacing.two,
+          bottom: BottomTabInset + Spacing.three,
         },
       ]}>
       <View style={styles.left}>
         <MaterialIcons name="system-update" size={20} color="#ffffff" />
-        <View style={styles.copy}>
-          <ThemedText style={styles.title}>
-            {isUpdatePending ? 'Update ready' : 'Downloading update…'}
-          </ThemedText>
-          <ThemedText style={styles.subtitle}>
-            {isUpdatePending ? 'Restart to apply the latest changes' : 'Please wait a moment'}
-          </ThemedText>
-        </View>
+        <ThemedText style={styles.title} numberOfLines={1}>
+          {isUpdatePending ? 'Update ready' : 'Downloading update…'}
+        </ThemedText>
       </View>
 
       <View style={styles.actions}>
@@ -109,9 +102,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: Spacing.two,
-    paddingVertical: Spacing.two,
+    // One line of copy, so this only needs enough height for the Restart
+    // button to stay a comfortable target.
+    paddingVertical: Spacing.one + 2,
     paddingHorizontal: Spacing.three,
-    borderRadius: 14,
+    minHeight: 48,
+    borderRadius: Radius.full,
     shadowColor: '#000',
     shadowOpacity: 0.25,
     shadowRadius: 8,
@@ -124,19 +120,12 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     flex: 1,
   },
-  copy: {
-    flex: 1,
-  },
   title: {
+    flex: 1,
     color: '#ffffff',
     fontSize: 14,
     lineHeight: 18,
     fontWeight: '700',
-  },
-  subtitle: {
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: 12,
-    lineHeight: 16,
   },
   actions: {
     flexDirection: 'row',
@@ -144,9 +133,10 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   restart: {
-    paddingVertical: Spacing.one,
+    minHeight: 34,
+    justifyContent: 'center',
     paddingHorizontal: Spacing.three,
-    borderRadius: 8,
+    borderRadius: Radius.full,
     backgroundColor: '#ffffff',
   },
   pressed: {

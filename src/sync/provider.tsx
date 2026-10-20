@@ -20,6 +20,7 @@ import {
   getLocalUserId,
   hasAnyCategories,
   migratePersonFlagIds,
+  outboxCount,
   seedMissingPresets,
   seedPresets,
   setCurrentUserId,
@@ -30,13 +31,29 @@ import { googleSignInIdToken, googleSignOut, isGoogleConfigured } from '@/lib/go
 import { ensureDefaultReminder } from '@/lib/notifications';
 import { avatarUrl as getSignedAvatarUrl, getAvatarPath, upsertProfile } from '@/lib/profile';
 import { supabase } from '@/lib/supabase';
-import { getLastSyncFailure, runSync, type SyncFailure } from '@/sync/engine';
+import { getLastSyncFailure, runSharedSync, runSync, type SyncFailure } from '@/sync/engine';
 import { startRealtime, stopRealtime } from '@/sync/realtime';
 import { readCachedUser } from '@/sync/session-cache';
 import { clearUndo } from '@/lib/undo';
 
 /** How often to retry a sync while the app is foregrounded (catches reconnects). */
 const SYNC_INTERVAL_MS = 30_000;
+
+/**
+ * How long to wait after each consecutive failure before trying again.
+ *
+ * Without this, a phone with no connection re-ran the whole cycle every thirty
+ * seconds, and every one of those attempts sat on a dead socket until the
+ * request timed out. Anything that wanted a sync — opening a shared book above
+ * all — queued up behind it. A user action still overrides the wait.
+ */
+const BACKOFF_MS = [5_000, 15_000, 45_000, 120_000, 300_000] as const;
+
+/** How long to gather up edits before sending them, so a burst goes up once. */
+const EDIT_DEBOUNCE_MS = 1_200;
+
+/** Which tables a cycle covers: everything, or just the shared books. */
+type Lane = 'full' | 'shared';
 
 /** Flag so the "add newly-introduced presets" top-up runs only once per device. */
 const PRESETS_TOPUP_KEY = 'presets_topup_v2';
@@ -53,6 +70,7 @@ type SyncContextValue = {
   /** URL for the user's avatar (uploaded, else the Google photo), or null. */
   avatarUrl: string | null;
   status: SyncStatus;
+  /** When the last successful cycle finished, or null if none has. */
   lastSyncedAt: Date | null;
   /** The last row the server refused, or null. Shown in Settings. */
   failure: SyncFailure | null;
@@ -61,11 +79,21 @@ type SyncContextValue = {
   logOut: () => Promise<void>;
   syncNow: () => void;
   /**
-   * A sync cycle that starts after this call — waiting out any cycle already
-   * running, since that one may have begun before the data you care about
-   * reached the server. Resolves true once everything is up to date.
+   * Bring everything up to date and resolve with whether that worked.
+   *
+   * Pass `force` for something the user asked for by hand (a pull-to-refresh):
+   * it waits out any cycle already running — which may have begun before the
+   * data they care about reached the server — and ignores the offline
+   * back-off. Without it, a cycle already in flight is shared, and an offline
+   * phone answers `false` straight away instead of making the caller wait.
    */
-  refreshNow: () => Promise<boolean>;
+  refreshNow: (force?: boolean) => Promise<boolean>;
+  /**
+   * The same, but only for shared books — three requests instead of ten.
+   * Everything else in the app is this device's own data, which no amount of
+   * fetching can change.
+   */
+  refreshShared: (force?: boolean) => Promise<boolean>;
   /** Re-fetch the avatar (after the user changes it). */
   reloadAvatar: () => Promise<void>;
 };
@@ -97,6 +125,11 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   // The cycle currently running, if any. Callers that arrive mid-cycle share
   // it instead of starting a second one alongside.
   const inflight = useRef<Promise<boolean> | null>(null);
+  // Consecutive failures, and the moment it's worth trying again. Reset by a
+  // success, by the app coming back to the foreground, and by the socket
+  // reconnecting — all three are evidence the network may be back.
+  const failures = useRef(0);
+  const nextAttempt = useRef(0);
   // The Google account photo, used as the avatar until the user uploads one.
   const googlePicture = useRef<string | null>(null);
   // Lets the realtime channel trigger a catch-up pull without being rebuilt
@@ -105,16 +138,28 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
 
   // Stable: reads the active user from the db module, so it never goes stale
   // inside long-lived listeners.
-  const sync = useCallback((): Promise<boolean> => {
+  const start = useCallback((lane: Lane, force: boolean): Promise<boolean> => {
     const userId = getCurrentUserId();
     if (!userId) return Promise.resolve(false);
+    // A cycle is already running: join it rather than open a second set of
+    // requests against the same tables. The full lane covers the shared one.
     if (inflight.current) return inflight.current;
+    // Offline and still inside the back-off. Answering straight away is the
+    // whole point — the caller gets to show saved data instead of a spinner.
+    if (!force && Date.now() < nextAttempt.current) return Promise.resolve(false);
 
     setStatus('syncing');
-    const cycle = runSync(userId)
+    const cycle = (lane === 'shared' ? runSharedSync(userId) : runSync(userId))
       .then((ok) => {
         setStatus(ok ? 'idle' : 'offline');
-        if (ok) setLastSyncedAt(new Date());
+        if (ok) {
+          failures.current = 0;
+          nextAttempt.current = 0;
+          setLastSyncedAt(new Date());
+        } else {
+          failures.current = Math.min(failures.current + 1, BACKOFF_MS.length);
+          nextAttempt.current = Date.now() + BACKOFF_MS[failures.current - 1];
+        }
         // Surfaced rather than swallowed: a row the server keeps refusing is a
         // bug to be read, not a silent "offline".
         setFailure(getLastSyncFailure());
@@ -127,10 +172,41 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     return cycle;
   }, []);
 
-  const refreshNow = useCallback(async (): Promise<boolean> => {
-    if (inflight.current) await inflight.current;
-    return sync();
-  }, [sync]);
+  /**
+   * Run a cycle, optionally insisting on a fresh one.
+   *
+   * `force` waits out a cycle already in flight before starting its own, since
+   * that one may have begun before the change the caller cares about reached
+   * the server. Reserve it for something the user did on purpose.
+   */
+  const run = useCallback(
+    async (lane: Lane, force = false): Promise<boolean> => {
+      const current = inflight.current;
+      if (current) {
+        const ok = await current;
+        if (!force) return ok;
+      }
+      return start(lane, force);
+    },
+    [start]
+  );
+
+  /** Clear the offline back-off — the network has just shown signs of life. */
+  const resetBackoff = useCallback(() => {
+    failures.current = 0;
+    nextAttempt.current = 0;
+  }, []);
+
+  const sync = useCallback((): Promise<boolean> => run('full'), [run]);
+  const refreshNow = useCallback((force = false): Promise<boolean> => run('full', force), [run]);
+  const refreshShared = useCallback(
+    (force = false): Promise<boolean> => run('shared', force),
+    [run]
+  );
+  /** The Sync now button in Settings: always a fresh cycle, back-off or not. */
+  const syncNow = useCallback(() => {
+    void run('full', true);
+  }, [run]);
 
   // Kept in a ref (via an effect, not during render — the React Compiler is on)
   // so the realtime channel can trigger a catch-up pull without being rebuilt.
@@ -161,7 +237,11 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     // Shared books go live as soon as we know who we are. Realtime only
     // delivers what RLS allows, so the session must be in place first.
     startRealtime(() => {
-      syncRef.current?.();
+      // The socket is up, so the network is: don't sit out a back-off built
+      // up while it was down.
+      failures.current = 0;
+      nextAttempt.current = 0;
+      void syncRef.current?.();
     });
     // Show the Google account photo right away; reloadAvatar() upgrades to an
     // uploaded avatar if the user has set one.
@@ -195,7 +275,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       ensureDefaultReminder().catch(() => {});
       reloadAvatar();
 
-      const synced = await sync();
+      const synced = await run('full', true);
 
       // A brand-new account (nothing synced down) gets the default categories.
       // Only once a sync has actually completed: offline we can't tell "new
@@ -203,7 +283,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       // categories the next pull brings down.
       if (synced && !hasAnyCategories()) {
         seedPresets(userId);
-        await sync();
+        await run('full', true);
       }
 
       // One-time: introduce presets added in a newer app version (e.g. the
@@ -213,13 +293,13 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
         if (!(await AsyncStorage.getItem(PRESETS_TOPUP_KEY))) {
           const added = seedMissingPresets(userId);
           await AsyncStorage.setItem(PRESETS_TOPUP_KEY, '1');
-          if (added > 0) await sync();
+          if (added > 0) await run('full', true);
         }
       } catch {
         // non-critical — new presets can also be added by hand
       }
     },
-    [sync, reloadAvatar, applyIdentity]
+    [run, reloadAvatar, applyIdentity]
   );
 
   // Restore the saved session on launch, and keep email in sync with auth events.
@@ -279,21 +359,40 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const appSub = AppState.addEventListener('change', (s) => {
       if (s === 'active') {
-        sync();
+        // Coming back to the app is a fresh chance for the network, so the
+        // back-off starts over rather than making the user wait it out.
+        resetBackoff();
+        void sync();
         // A socket rarely survives a spell in the background. Reopening it
         // triggers a pull, which covers anything missed while it was down.
-        if (getCurrentUserId()) startRealtime(() => void sync());
+        if (getCurrentUserId()) {
+          startRealtime(() => {
+            resetBackoff();
+            void syncRef.current?.();
+          });
+        }
       } else {
         // Don't hold a websocket open behind the user's back.
         stopRealtime();
       }
     });
-    const timer = setInterval(sync, SYNC_INTERVAL_MS);
+    const timer = setInterval(() => void sync(), SYNC_INTERVAL_MS);
 
     let debounce: ReturnType<typeof setTimeout> | null = null;
     const dbSub = SQLite.addDatabaseChangeListener(() => {
+      // A cycle writes to the database itself — draining the outbox, applying
+      // pulled rows — and every one of those writes used to schedule another
+      // cycle behind it. Only a change that leaves something queued for upload
+      // is the user's, and only that is worth a sync.
+      if (inflight.current) return;
+      if (outboxCount() === 0) return;
       if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(sync, 1000);
+      debounce = setTimeout(() => {
+        // The user just changed something: worth one attempt now, even mid
+        // back-off, but it still rebuilds if that attempt fails too.
+        resetBackoff();
+        void sync();
+      }, EDIT_DEBOUNCE_MS);
     });
 
     return () => {
@@ -302,7 +401,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       if (debounce) clearTimeout(debounce);
       dbSub.remove();
     };
-  }, [sync]);
+  }, [sync, resetBackoff]);
 
   const signInWithGoogle = useCallback(async () => {
     if (!isGoogleConfigured()) {
@@ -348,8 +447,9 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     failure,
     signInWithGoogle,
     logOut,
-    syncNow: sync,
+    syncNow,
     refreshNow,
+    refreshShared,
     reloadAvatar,
   };
 

@@ -25,6 +25,16 @@ import { supabase } from '@/lib/supabase';
 
 let channel: RealtimeChannel | null = null;
 
+/**
+ * True only while the server has confirmed the subscription.
+ *
+ * `channel !== null` says we asked to listen; this says the other phone's
+ * entries are actually reaching us. That distinction is what lets a screen
+ * skip a round trip: if the socket is live and a pull has run since it came
+ * up, there is nothing a fetch would tell us that we don't already know.
+ */
+let subscribed = false;
+
 /** Applies one row from a change event. */
 function handleChange(table: SharedTable, payload: { eventType: string; new?: any; old?: any }): void {
   if (payload.eventType === 'DELETE') {
@@ -63,7 +73,8 @@ export function startRealtime(onResubscribe: () => void): void {
   // server only ever sends rows from books this account belongs to. Filtering
   // client-side by book id would be both redundant and easier to get wrong.
   next.subscribe((status) => {
-    if (status === 'SUBSCRIBED') onResubscribe();
+    subscribed = status === 'SUBSCRIBED';
+    if (subscribed) onResubscribe();
   });
 
   channel = next;
@@ -71,6 +82,7 @@ export function startRealtime(onResubscribe: () => void): void {
 
 /** Stop listening — on sign-out, or while the app is in the background. */
 export function stopRealtime(): void {
+  subscribed = false;
   if (!channel) return;
   const open = channel;
   channel = null;
@@ -82,4 +94,9 @@ export function stopRealtime(): void {
 /** True while a channel object exists (not necessarily connected). */
 export function isRealtimeActive(): boolean {
   return channel !== null;
+}
+
+/** True while the server has confirmed the subscription and is pushing rows. */
+export function isRealtimeLive(): boolean {
+  return channel !== null && subscribed;
 }

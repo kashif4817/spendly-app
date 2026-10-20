@@ -3,7 +3,8 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { MoneyColors } from '@/constants/app';
-import { Spacing } from '@/constants/theme';
+import { Radius, Spacing } from '@/constants/theme';
+import type { CategoryIcon } from '@/constants/categories';
 import type { Transaction } from '@/db';
 import { useTheme } from '@/hooks/use-theme';
 import { formatRelativeDay, formatTime } from '@/lib/date';
@@ -11,7 +12,7 @@ import { formatSigned } from '@/lib/money';
 
 type Props = {
   transaction: Transaction;
-  emoji: string;
+  icon: CategoryIcon;
   onPress?: () => void;
   /** Show the time of day instead of the category as the subtitle. */
   showTime?: boolean;
@@ -26,7 +27,7 @@ type Props = {
 
 export function TransactionRow({
   transaction,
-  emoji,
+  icon,
   onPress,
   showTime,
   showDateAndTime,
@@ -49,12 +50,12 @@ export function TransactionRow({
       onPress={onPress}
       style={({ pressed }) => [
         styles.row,
-        !inset && [styles.card, { backgroundColor: theme.backgroundElement }],
+        !inset && [styles.card, theme.glass],
         pressed && { opacity: 0.6 },
       ]}
       accessibilityRole="button">
-      <View style={[styles.iconWrap, { backgroundColor: theme.background }]}>
-        <ThemedText style={styles.emoji}>{emoji}</ThemedText>
+      <View style={[styles.iconWrap, theme.glassWeak]}>
+        <MaterialIcons name={icon} size={20} color={theme.accentTint} />
       </View>
 
       <View style={styles.middle}>
@@ -86,7 +87,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.two,
   },
   card: {
-    borderRadius: 16,
+    borderRadius: Radius.card,
     paddingHorizontal: Spacing.three,
     paddingVertical: 10,
     marginBottom: 6,
@@ -94,12 +95,9 @@ const styles = StyleSheet.create({
   iconWrap: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  emoji: {
-    fontSize: 18,
   },
   middle: {
     flex: 1,

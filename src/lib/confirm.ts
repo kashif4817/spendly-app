@@ -1,34 +1,75 @@
 /**
  * The app's one confirmation dialog.
  *
- * It's the platform's own alert, which is what the delete-entry prompt has
- * always used: plain, instantly familiar, and short enough to read at a glance.
- * Every confirmation now goes through here so there is exactly one of them
- * rather than a styled variant per screen.
+ * This used to be the platform's own `Alert`, which was fine when the app
+ * looked like the platform. It doesn't any more: a stock system alert dropped
+ * on top of the Aurora glass is the one surface in the app that belongs to
+ * nobody, and "Delete forever" is the worst place to lose the thread.
  *
- * Button order matters and is not arbitrary. Android lays the buttons out in
- * array order with the last one as the affirmative, so Cancel has to come
- * first; iOS reads `style: 'cancel'` and places it itself. Passing
- * `destructive` paints the confirm button red on iOS and, with `cancelable`,
- * tapping outside or pressing Back counts as cancelling.
+ * So `confirm()` and `notify()` keep exactly the API every call site already
+ * uses, but instead of handing the request to the OS they put it in this
+ * module-level slot. <ConfirmHost>, mounted once at the root, renders it as a
+ * themed pane. Call sites didn't change at all.
  *
- * `Alert` is deliberately NOT used for pickers — with more than three buttons
- * Android silently drops the extras, which is what `ActionSheet` exists for.
- * Two buttons is well inside what it handles.
+ * Still deliberately NOT a picker: two buttons, one question. More than that
+ * is what `ActionSheet` is for.
  */
 
-import { Alert } from 'react-native';
+export type ConfirmRequest = {
+  /** Bumped per request so a replacement re-opens rather than re-using state. */
+  id: number;
+  title: string;
+  message?: string;
+  confirmLabel: string;
+  /** null for a one-button message (see `notify`). */
+  cancelLabel: string | null;
+  /** Paint the confirm button as destructive (delete, sign out, turn off). */
+  destructive: boolean;
+  onConfirm?: () => void;
+  onCancel?: () => void;
+};
 
 type ConfirmOptions = {
   title: string;
   message?: string;
   confirmLabel?: string;
   cancelLabel?: string;
-  /** Paint the confirm button as destructive (delete, sign out, turn off). */
   destructive?: boolean;
   onConfirm: () => void;
   onCancel?: () => void;
 };
+
+let current: ConfirmRequest | null = null;
+let seq = 0;
+
+const listeners = new Set<() => void>();
+
+function emit(): void {
+  for (const fn of listeners) fn();
+}
+
+/** Used by <ConfirmHost>; not meant for screens. */
+export function subscribeConfirm(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+/** Used by <ConfirmHost>; not meant for screens. */
+export function getConfirmRequest(): ConfirmRequest | null {
+  return current;
+}
+
+/**
+ * Close whatever is open.
+ *
+ * The host clears the slot BEFORE running the handler, so a handler that asks
+ * its own question — the second "are you really sure" on a delete that would
+ * destroy history — opens cleanly instead of fighting the dialog it came from.
+ */
+export function dismissConfirm(): void {
+  current = null;
+  emit();
+}
 
 export function confirm({
   title,
@@ -39,21 +80,30 @@ export function confirm({
   onConfirm,
   onCancel,
 }: ConfirmOptions): void {
-  Alert.alert(
+  current = {
+    id: ++seq,
     title,
     message,
-    [
-      { text: cancelLabel, style: 'cancel', onPress: onCancel },
-      { text: confirmLabel, style: destructive ? 'destructive' : 'default', onPress: onConfirm },
-    ],
-    { cancelable: true, onDismiss: onCancel }
-  );
+    confirmLabel,
+    cancelLabel,
+    destructive: !!destructive,
+    onConfirm,
+    onCancel,
+  };
+  emit();
 }
 
 /** A one-button message: something failed, or something is done. */
 export function notify(title: string, message?: string, onClose?: () => void): void {
-  Alert.alert(title, message, [{ text: 'OK', onPress: onClose }], {
-    cancelable: true,
-    onDismiss: onClose,
-  });
+  current = {
+    id: ++seq,
+    title,
+    message,
+    confirmLabel: 'OK',
+    cancelLabel: null,
+    destructive: false,
+    onConfirm: onClose,
+    onCancel: onClose,
+  };
+  emit();
 }

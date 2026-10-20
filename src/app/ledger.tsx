@@ -1,14 +1,6 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import {
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
@@ -22,6 +14,7 @@ import {
   PrimaryButton,
 } from '@/components/form';
 import { Segmented } from '@/components/segmented';
+import { confirm, notify } from '@/lib/confirm';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
@@ -71,11 +64,11 @@ export default function LedgerEntryScreen() {
   function onSave() {
     const value = parseAmount(amount);
     if (!person.trim()) {
-      Alert.alert('Enter a name', 'Who is this with?');
+      notify('Enter a name', 'Who is this with?');
       return;
     }
     if (value <= 0) {
-      Alert.alert('Enter an amount', 'The amount must be greater than zero.');
+      notify('Enter an amount', 'The amount must be greater than zero.');
       return;
     }
     const payload = { person: person.trim(), direction, amount: value, note: note.trim(), day };
@@ -101,20 +94,19 @@ export default function LedgerEntryScreen() {
 
   function onDelete() {
     if (!editId) return;
-    Alert.alert('Delete entry', 'This removes the entry. You can undo for a few seconds.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          const removed = existing ?? getLedgerEntry(editId);
-          if (!removed) return;
-          deleteLedgerEntry(editId);
-          offerUndo('Ledger entry deleted', () => restoreLedgerEntry(removed));
-          router.back();
-        },
+    confirm({
+      title: 'Delete entry',
+      message: 'This removes the entry. You can undo for a few seconds.',
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: () => {
+  const removed = existing ?? getLedgerEntry(editId);
+  if (!removed) return;
+  deleteLedgerEntry(editId);
+  offerUndo('Ledger entry deleted', () => restoreLedgerEntry(removed));
+  router.back();
       },
-    ]);
+    });
   }
 
   const title = editId ? 'Edit loan' : 'Add loan';
@@ -168,7 +160,7 @@ export default function LedgerEntryScreen() {
                       onPress={() => setPerson(p)}
                       style={({ pressed }) => [
                         styles.suggestChip,
-                        { backgroundColor: theme.background },
+                        theme.glassWeak,
                         pressed && styles.pressed,
                       ]}>
                       <ThemedText type="small">{p}</ThemedText>

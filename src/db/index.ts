@@ -2226,6 +2226,18 @@ export function getPendingRowIds(table: AnyTable): string[] {
   return rows.map((r) => r.row_id);
 }
 
+/**
+ * How many rows are waiting to go up.
+ *
+ * Used to tell a write the user made (which is worth a sync) from a write the
+ * sync itself made while draining the queue or applying pulled rows (which is
+ * not) — every one of those used to schedule another full cycle.
+ */
+export function outboxCount(): number {
+  const row = db.getFirstSync<{ n: number }>('SELECT COUNT(*) AS n FROM sync_outbox');
+  return row?.n ?? 0;
+}
+
 /** The rows currently queued for upload, oldest first. */
 export type OutboxEntry = { seq: number; table_name: AnyTable; row_id: string; op: 'upsert' | 'delete' };
 

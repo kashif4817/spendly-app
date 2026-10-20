@@ -4,7 +4,7 @@ import { Animated, Modal, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
-import { Spacing } from '@/constants/theme';
+import { Radius, Scrim, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 const DANGER = '#e5484d';
@@ -76,7 +76,7 @@ export function ActionSheet({ visible, title, actions, cancelLabel = 'Cancel', o
             style={[
               styles.sheet,
               {
-                backgroundColor: theme.background,
+                ...theme.glassOverlay,
                 paddingBottom: insets.bottom + Spacing.three,
                 opacity,
                 transform: [{ translateY: slide }],
@@ -96,7 +96,7 @@ export function ActionSheet({ visible, title, actions, cancelLabel = 'Cancel', o
                 onPress={() => run(action)}
                 style={({ pressed }) => [
                   styles.row,
-                  { backgroundColor: theme.backgroundElement },
+                  theme.glass,
                   pressed && styles.pressed,
                 ]}
                 accessibilityRole="button">
@@ -133,15 +133,16 @@ export function ActionSheet({ visible, title, actions, cancelLabel = 'Cancel', o
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: Scrim,
     justifyContent: 'flex-end',
   },
   sheetWrap: {
     width: '100%',
   },
   sheet: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderTopLeftRadius: Radius.large,
+    borderTopRightRadius: Radius.large,
+    borderBottomWidth: 0,
     paddingHorizontal: Spacing.three,
     paddingTop: Spacing.two,
     gap: Spacing.two,
@@ -161,7 +162,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.three,
-    borderRadius: 14,
+    borderRadius: Radius.medium,
     paddingVertical: Spacing.three,
     paddingHorizontal: Spacing.three,
     minHeight: 52,

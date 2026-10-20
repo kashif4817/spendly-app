@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
-import { Spacing } from '@/constants/theme';
+import { Radius, Scrim, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 const DANGER = '#e5484d';
@@ -97,7 +97,7 @@ export function PromptModal({
             <Animated.View
               style={[
                 styles.card,
-                { backgroundColor: theme.background, opacity, transform: [{ scale }] },
+                { ...theme.glassOverlay, opacity, transform: [{ scale }] },
               ]}>
               <ThemedText type="subtitle" style={styles.title}>
                 {title}
@@ -124,10 +124,12 @@ export function PromptModal({
                 accessibilityLabel={title}
                 style={[
                   styles.input,
+                  theme.glassInput,
                   {
-                    backgroundColor: theme.backgroundElement,
                     color: theme.text,
-                    borderColor: error ? DANGER : 'transparent',
+                    // The pane already carries an edge; a bad value recolours
+                    // it rather than adding a second one.
+                    borderColor: error ? DANGER : theme.glassInput.borderColor,
                   },
                 ]}
               />
@@ -143,7 +145,7 @@ export function PromptModal({
                   onPress={onCancel}
                   style={({ pressed }) => [
                     styles.btn,
-                    { backgroundColor: theme.backgroundElement },
+                    theme.glass,
                     pressed && styles.pressed,
                   ]}
                   accessibilityRole="button">
@@ -176,7 +178,7 @@ const styles = StyleSheet.create({
   },
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: Scrim,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.four,
@@ -184,7 +186,7 @@ const styles = StyleSheet.create({
   card: {
     width: '100%',
     maxWidth: 360,
-    borderRadius: 20,
+    borderRadius: Radius.large,
     padding: Spacing.four,
     gap: Spacing.two,
   },
@@ -193,7 +195,7 @@ const styles = StyleSheet.create({
     lineHeight: 28,
   },
   input: {
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     borderWidth: 1,
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.three,
@@ -207,7 +209,7 @@ const styles = StyleSheet.create({
   },
   btn: {
     flex: 1,
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     paddingVertical: Spacing.three,
     alignItems: 'center',
     justifyContent: 'center',

@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
-import { Spacing } from '@/constants/theme';
+import { Radius, Spacing } from '@/constants/theme';
 import type { DayTotal } from '@/db';
 import { useTheme } from '@/hooks/use-theme';
 import { useWeekStart } from '@/hooks/use-week-start';
@@ -151,7 +151,7 @@ export function MonthCalendar({ month, selected, totals, onSelect, onChangeMonth
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 20,
+    borderRadius: Radius.card,
     padding: Spacing.three,
     gap: Spacing.two,
   },

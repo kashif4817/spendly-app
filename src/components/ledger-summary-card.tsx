@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
-import { Spacing } from '@/constants/theme';
+import { Radius, Spacing } from '@/constants/theme';
 import type { LedgerTotals } from '@/db';
 import { useTheme } from '@/hooks/use-theme';
 import { formatMoney } from '@/lib/money';
@@ -62,7 +62,7 @@ export function LedgerSummaryCard({ totals }: { totals: LedgerTotals }) {
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 20,
+    borderRadius: Radius.card,
     padding: Spacing.four,
     gap: Spacing.half,
   },

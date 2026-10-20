@@ -12,7 +12,7 @@ import {
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { CURRENCY } from '@/constants/app';
-import { Spacing } from '@/constants/theme';
+import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { addDays, formatRelativeDay, todayKey } from '@/lib/date';
 
@@ -96,7 +96,7 @@ export function FormRow({
   const theme = useTheme();
   const body = (
     <>
-      <View style={[styles.rowIcon, { backgroundColor: theme.background }]}>
+      <View style={[styles.rowIcon, theme.glassWeak]}>
         <MaterialIcons name={icon} size={20} color={theme.accent} />
       </View>
       <View style={styles.rowBody}>
@@ -246,7 +246,7 @@ export function FormLink({
 
 const styles = StyleSheet.create({
   amountCard: {
-    borderRadius: 20,
+    borderRadius: Radius.card,
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.three,
     paddingBottom: Spacing.two,
@@ -267,7 +267,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.one,
   },
   card: {
-    borderRadius: 20,
+    borderRadius: Radius.card,
     paddingHorizontal: Spacing.three,
   },
   divider: {
@@ -315,7 +315,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primary: {
-    borderRadius: 14,
+    borderRadius: Radius.medium,
     paddingVertical: Spacing.three,
     alignItems: 'center',
     justifyContent: 'center',

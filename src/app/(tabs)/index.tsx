@@ -13,7 +13,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { TransactionRow } from '@/components/transaction-row';
 import { MoneyColors } from '@/constants/app';
-import { BottomTabInset, HeroCard, MaxContentWidth, Spacing } from '@/constants/theme';
+import { BottomTabInset, MaxContentWidth, Radius, Scrim, Spacing } from '@/constants/theme';
 import {
   combineLedgerTotals,
   getCategoryBreakdown,
@@ -23,7 +23,7 @@ import {
   getSharedBookSummaries,
   getTotals,
 } from '@/db';
-import { useCategoryEmoji, useQuery } from '@/db/hooks';
+import { useCategoryIcon, useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
 import { useWeekStart } from '@/hooks/use-week-start';
 import {
@@ -47,7 +47,7 @@ export default function DashboardScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { name, avatarUrl } = useSync();
-  const emojiFor = useCategoryEmoji();
+  const iconFor = useCategoryIcon();
 
   const weekStartsOn = useWeekStart();
 
@@ -134,16 +134,16 @@ export default function DashboardScreen() {
                 onPress={() => setMenuOpen(true)}
                 style={({ pressed }) => [
                   styles.periodButton,
-                  { backgroundColor: HeroCard.inset },
+                  { backgroundColor: theme.hero.inset },
                   pressed && styles.pressed,
                 ]}
                 accessibilityRole="button"
                 accessibilityLabel={`Change period, currently ${periodLabel}`}>
-                <MaterialIcons name="calendar-today" size={14} color={HeroCard.in} />
-                <ThemedText type="smallBold" style={[styles.periodButtonText, { color: HeroCard.text }]}>
+                <MaterialIcons name="calendar-today" size={14} color={theme.accentTint} />
+                <ThemedText type="smallBold" style={[styles.periodButtonText, { color: theme.text }]}>
                   {periodLabel}
                 </ThemedText>
-                <MaterialIcons name="expand-more" size={18} color={HeroCard.text} />
+                <MaterialIcons name="expand-more" size={18} color={theme.text} />
               </Pressable>
             }>
             {periodKey === 'custom' && (
@@ -210,8 +210,12 @@ export default function DashboardScreen() {
                 const share = totals.expense > 0 ? Math.round((slice.total / totals.expense) * 100) : 0;
                 return (
                   <View key={slice.category} style={styles.catRow}>
-                    <View style={[styles.catIcon, { backgroundColor: theme.background }]}>
-                      <ThemedText style={styles.catEmoji}>{emojiFor(slice.category, 'out')}</ThemedText>
+                    <View style={[styles.catIcon, theme.glassWeak]}>
+                      <MaterialIcons
+                        name={iconFor(slice.category, 'out')}
+                        size={19}
+                        color={theme.accentTint}
+                      />
                     </View>
                     <View style={styles.catBody}>
                       <View style={styles.catLine}>
@@ -275,7 +279,7 @@ export default function DashboardScreen() {
                 <TransactionRow
                   key={tx.id}
                   transaction={tx}
-                  emoji={emojiFor(tx.category, tx.type)}
+                  icon={iconFor(tx.category, tx.type)}
                   showDateAndTime
                   onPress={() => router.push({ pathname: '/transaction', params: { id: tx.id } })}
                 />
@@ -295,7 +299,7 @@ export default function DashboardScreen() {
         <Pressable style={styles.backdrop} onPress={() => setMenuOpen(false)}>
           {/* Swallows taps so pressing inside the menu doesn't close it. */}
           <Pressable onPress={() => {}} style={styles.menuWrap}>
-            <ThemedView type="backgroundElement" style={styles.menu}>
+            <View style={[styles.menu, theme.glassOverlay]}>
               {periods.map((p) => {
                 const active = p.key === periodKey;
                 return (
@@ -310,10 +314,10 @@ export default function DashboardScreen() {
                     accessibilityState={{ selected: active }}>
                     <ThemedText
                       type={active ? 'smallBold' : 'small'}
-                      style={active ? { color: theme.accent } : undefined}>
+                      style={active ? { color: theme.accentTint } : undefined}>
                       {p.label}
                     </ThemedText>
-                    {active && <MaterialIcons name="check" size={18} color={theme.accent} />}
+                    {active && <MaterialIcons name="check" size={18} color={theme.accentTint} />}
                   </Pressable>
                 );
               })}
@@ -333,7 +337,7 @@ export default function DashboardScreen() {
                   onChange={(value) => setWeekStart(value === 'mon' ? 1 : 0)}
                 />
               </View>
-            </ThemedView>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>
@@ -373,10 +377,11 @@ function QuickAction({
       style={({ pressed }) => [styles.quickAction, pressed && styles.quickActionPressed]}
       accessibilityRole="button"
       accessibilityLabel={label}>
-      <View style={[styles.quickActionTile, { backgroundColor: theme.backgroundElement }]}>
-        <View style={[styles.quickActionIcon, { backgroundColor: `${color}1A` }]}>
-          <MaterialIcons name={icon} size={24} color={color} />
-        </View>
+      {/* One surface, not two: the icon sits straight on the pane. The old
+          `color + 1A` well was a 10% tint over translucent glass, which went
+          muddy in dark and all but vanished in light. */}
+      <View style={[styles.quickActionTile, theme.glass]}>
+        <MaterialIcons name={icon} size={26} color={color} />
       </View>
       <ThemedText type="small" style={styles.quickActionLabel} numberOfLines={1}>
         {label}
@@ -385,7 +390,7 @@ function QuickAction({
   );
 }
 
-/** Custom-range stepper. It sits on the mint card, so it uses the card's colours. */
+/** Custom-range stepper. It sits on the hero pane, so it takes its colours. */
 function DateStepper({
   label,
   value,
@@ -397,24 +402,25 @@ function DateStepper({
   max?: string;
   onChange: (day: string) => void;
 }) {
+  const theme = useTheme();
   const atMax = max ? value >= max : false;
   return (
-    <View style={[styles.stepper, { backgroundColor: HeroCard.inset }]}>
-      <ThemedText type="small" style={[styles.stepperLabel, { color: HeroCard.textSecondary }]}>
+    <View style={[styles.stepper, { backgroundColor: theme.hero.inset }]}>
+      <ThemedText type="small" style={[styles.stepperLabel, { color: theme.textSecondary }]}>
         {label}
       </ThemedText>
       <View style={styles.stepperControls}>
         <Pressable onPress={() => onChange(addDays(value, -1))} hitSlop={8}>
-          <ThemedText style={[styles.stepperArrow, { color: HeroCard.text }]}>‹</ThemedText>
+          <ThemedText style={[styles.stepperArrow, { color: theme.text }]}>‹</ThemedText>
         </Pressable>
         <ThemedText
           type="smallBold"
-          style={[styles.stepperValue, { color: HeroCard.text }]}
+          style={[styles.stepperValue, { color: theme.text }]}
           numberOfLines={1}>
           {formatRelativeDay(value)}
         </ThemedText>
         <Pressable onPress={() => !atMax && onChange(addDays(value, 1))} hitSlop={8}>
-          <ThemedText style={[styles.stepperArrow, { color: HeroCard.text }, atMax && styles.dim]}>
+          <ThemedText style={[styles.stepperArrow, { color: theme.text }, atMax && styles.dim]}>
             ›
           </ThemedText>
         </Pressable>
@@ -489,7 +495,7 @@ const styles = StyleSheet.create({
   },
   stepper: {
     flex: 1,
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     paddingVertical: Spacing.two,
     paddingHorizontal: Spacing.three,
     gap: 2,
@@ -529,14 +535,7 @@ const styles = StyleSheet.create({
     width: '100%',
     aspectRatio: 1,
     maxWidth: 76,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  quickActionIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
+    borderRadius: Radius.card,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -546,7 +545,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   card: {
-    borderRadius: 20,
+    borderRadius: Radius.card,
     padding: Spacing.three,
     gap: Spacing.three,
   },
@@ -563,13 +562,9 @@ const styles = StyleSheet.create({
   catIcon: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  catEmoji: {
-    fontSize: 20,
-    lineHeight: 26,
   },
   catBody: {
     flex: 1,
@@ -613,7 +608,7 @@ const styles = StyleSheet.create({
   },
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    backgroundColor: Scrim,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.four,
@@ -623,7 +618,7 @@ const styles = StyleSheet.create({
     maxWidth: 320,
   },
   menu: {
-    borderRadius: 20,
+    borderRadius: Radius.card,
     paddingVertical: Spacing.two,
   },
   menuItem: {

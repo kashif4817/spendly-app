@@ -2,8 +2,8 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
-import { MoneyColors } from '@/constants/app';
-import { HeroCard, Spacing } from '@/constants/theme';
+import { GlassView } from '@/components/glass';
+import { Radius, Spacing } from '@/constants/theme';
 import type { Totals } from '@/db';
 import { useTheme } from '@/hooks/use-theme';
 import { formatMoney, formatSigned } from '@/lib/money';
@@ -12,8 +12,9 @@ type Props = {
   label: string;
   totals: Totals;
   /**
-   * 'hero' is the dashboard's mint card, identical in light and dark mode;
-   * the default is a plain themed card.
+   * 'hero' is the dashboard's accent-tinted pane; the default is ordinary
+   * glass. Both let the mesh through — the hero just pushes the accent
+   * into it so the card a screen is built around reads as the subject.
    */
   tone?: 'default' | 'hero';
   /** Sits at the top right, e.g. the dashboard's period picker. */
@@ -29,39 +30,26 @@ type Props = {
 export function BalanceCard({ label, totals, tone = 'default', action, children }: Props) {
   const theme = useTheme();
   const hero = tone === 'hero';
-  const c = hero
-    ? {
-        background: HeroCard.background,
-        inset: HeroCard.inset,
-        divider: HeroCard.divider,
-        text: HeroCard.text,
-        secondary: HeroCard.textSecondary,
-        in: HeroCard.in,
-        out: HeroCard.out,
-      }
-    : {
-        background: theme.backgroundElement,
-        inset: theme.background,
-        divider: theme.backgroundSelected,
-        text: theme.text,
-        secondary: theme.textSecondary,
-        in: MoneyColors.in,
-        out: MoneyColors.out,
-      };
+  // Both tones now take their ink from the theme: a translucent pane follows
+  // whatever is behind it, so fixed text colours (which the old solid card could
+  // get away with) would fail in one theme or the other.
+  const c = {
+    inset: hero ? theme.hero.inset : theme.glassWeak.backgroundColor as string,
+    divider: hero ? theme.hero.divider : theme.backgroundSelected,
+    text: theme.text,
+    secondary: theme.textSecondary,
+    in: theme.moneyText.in,
+    out: theme.moneyText.out,
+  };
 
   const empty = totals.income === 0 && totals.expense === 0;
   const netColor = empty ? c.secondary : totals.net >= 0 ? c.in : c.out;
   const netCaption = empty ? 'No entries yet' : totals.net >= 0 ? 'saved' : 'overspent';
 
   return (
-    <View style={[styles.card, { backgroundColor: c.background }]}>
-      {hero && (
-        // Two soft shapes so the mint card has some character without a gradient.
-        <>
-          <View pointerEvents="none" style={[styles.glow, { backgroundColor: HeroCard.glow }]} />
-          <View pointerEvents="none" style={[styles.glowLow, { backgroundColor: HeroCard.glowTeal }]} />
-        </>
-      )}
+    <GlassView style={[styles.card, hero && theme.hero.tint]} radius={Radius.large}>
+      {/* No decorative blobs: clipped to the corners they read as two stray
+          half-circles, and the mesh already gives the pane its depth. */}
 
       <View style={styles.head}>
         <ThemedText type="smallBold" style={[styles.label, { color: c.secondary }]} numberOfLines={1}>
@@ -91,7 +79,7 @@ export function BalanceCard({ label, totals, tone = 'default', action, children 
           </ThemedText>
         </View>
       </View>
-    </View>
+    </GlassView>
   );
 }
 
@@ -130,26 +118,9 @@ function Leg({
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 20,
     padding: Spacing.three,
     gap: Spacing.three,
     overflow: 'hidden',
-  },
-  glow: {
-    position: 'absolute',
-    top: -60,
-    right: -40,
-    width: 180,
-    height: 180,
-    borderRadius: 999,
-  },
-  glowLow: {
-    position: 'absolute',
-    bottom: -70,
-    left: -50,
-    width: 160,
-    height: 160,
-    borderRadius: 999,
   },
   head: {
     flexDirection: 'row',
@@ -197,7 +168,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    borderRadius: 12,
+    borderRadius: Radius.small,
     paddingVertical: Spacing.two,
     paddingHorizontal: Spacing.three,
   },

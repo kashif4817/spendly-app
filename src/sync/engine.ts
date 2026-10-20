@@ -12,7 +12,6 @@
  */
 
 import {
-  applyRemoteRows,
   columnsFor,
   getOutbox,
   getRowForUpload,
@@ -20,11 +19,13 @@ import {
   isSharedTable,
   removeOutboxEntry,
   setSyncCursor,
+  SHARED_TABLES,
   SYNC_TABLES,
   type AnyTable,
 } from '@/db';
 import { supabase } from '@/lib/supabase';
-import { isSyncConfigured, PULL_BATCH_SIZE } from '@/sync/config';
+import { isSyncConfigured } from '@/sync/config';
+import { foldCursors, isMissingTable, pullTable } from '@/sync/pull';
 import { pullShared } from '@/sync/shared';
 
 /**
@@ -67,23 +68,6 @@ function recordFailure(
   };
 }
 
-/**
- * True when Supabase says the table itself isn't there.
- *
- * A table added by an app update only exists in the project once its SQL has
- * been run (see supabase/*.sql). Until then we skip that table rather than fail
- * the cycle — otherwise one missing table would stop *all* data syncing, and
- * an over-the-air update could reach a device before the backend is ready.
- * Queued changes stay in the outbox and go up once the table appears.
- */
-function isMissingTable(error: { code?: string; message?: string } | null): boolean {
-  if (!error) return false;
-  // 42P01 = undefined_table (Postgres); PGRST205 = unknown table (PostgREST cache).
-  if (error.code === '42P01' || error.code === 'PGRST205') return true;
-  const message = (error.message ?? '').toLowerCase();
-  return message.includes('does not exist') || message.includes('schema cache');
-}
-
 /** Build the row object to upload, forcing the owner and a live (non-deleted) state. */
 function buildUploadRow(table: AnyTable, local: Record<string, any>, userId: string) {
   const row: Record<string, any> = {};
@@ -118,11 +102,14 @@ function ownerColumn(table: AnyTable): string {
  * A dropped connection is different: that throws rather than returning an
  * error, and runSync's catch treats it as "offline, try again later".
  */
-async function push(userId: string): Promise<boolean> {
+async function push(userId: string, only?: readonly string[]): Promise<boolean> {
   let allSent = true;
 
   for (const entry of getOutbox()) {
     const table = entry.table_name;
+    // The shared lane drains only shared rows: a book shouldn't wait on a
+    // queued expense, and an expense shouldn't wait on a book.
+    if (only && !only.includes(table)) continue;
 
     if (entry.op === 'delete') {
       // Soft-delete on the server so other devices see the tombstone on pull.
@@ -158,42 +145,24 @@ async function push(userId: string): Promise<boolean> {
   return allSent;
 }
 
-/** Fetch and apply everything changed since the cursor. Advances the cursor on success. */
+/**
+ * Fetch and apply everything changed since the cursor. Advances the cursor on
+ * success.
+ *
+ * The seven tables are asked for at the same time rather than one after the
+ * other. They don't depend on each other, so running them in series only ever
+ * added six round trips of latency to a cycle that usually finds nothing to
+ * do at all.
+ */
 async function pull(userId: string): Promise<boolean> {
   const cursor = getSyncCursor();
-  let maxUpdatedAt = cursor;
+  const results = await Promise.allSettled(
+    SYNC_TABLES.map((table) => pullTable(table, cursor, userId))
+  );
 
-  for (const table of SYNC_TABLES) {
-    let pageCursor = cursor;
-
-    // Page through the table in case a first sync returns more than one batch.
-    for (;;) {
-      let query = supabase
-        .from(table)
-        .select('*')
-        .eq('user_id', userId)
-        .order('updated_at', { ascending: true })
-        .limit(PULL_BATCH_SIZE);
-      if (pageCursor) query = query.gt('updated_at', pageCursor);
-
-      const { data, error } = await query;
-      if (error) {
-        if (isMissingTable(error)) break; // skip this table, keep syncing the rest
-        return false;
-      }
-      if (!data || data.length === 0) break;
-
-      applyRemoteRows(table, data as any);
-
-      pageCursor = data[data.length - 1].updated_at as string;
-      if (!maxUpdatedAt || new Date(pageCursor).getTime() > new Date(maxUpdatedAt).getTime()) {
-        maxUpdatedAt = pageCursor;
-      }
-      if (data.length < PULL_BATCH_SIZE) break;
-    }
-  }
-
-  if (maxUpdatedAt && maxUpdatedAt !== cursor) setSyncCursor(maxUpdatedAt);
+  const newest = foldCursors(cursor, results);
+  if (newest === false) return false;
+  if (newest && newest !== cursor) setSyncCursor(newest);
   return true;
 }
 
@@ -211,7 +180,30 @@ export async function runSync(userId: string): Promise<boolean> {
     // problem with that row, not with the connection, and blocking reads on it
     // is what made a single bad row look like the app being permanently offline.
     const pushed = await push(userId);
-    if (!(await pull(userId))) return false;
+    // The two lanes are independent: the personal tables are scoped by owner,
+    // the shared ones by membership. Nothing in one waits on the other.
+    const [personal, shared] = await Promise.all([pull(userId), pullShared()]);
+    if (!personal || !shared) return false;
+    return pushed;
+  } catch {
+    return false; // network blip / offline — try again later
+  }
+}
+
+/**
+ * Run one cycle for the shared books ONLY — their outbox rows up, their three
+ * tables down.
+ *
+ * Opening a shared book used to run the full cycle above, which meant waiting
+ * on categories, transactions, budgets and the rest before the balance could
+ * be trusted. None of that has any bearing on what two people owe each other,
+ * so the book screen asks for this instead: the same guarantees over a third
+ * of the requests.
+ */
+export async function runSharedSync(userId: string): Promise<boolean> {
+  if (!isSyncConfigured()) return false;
+  try {
+    const pushed = await push(userId, SHARED_TABLES);
     if (!(await pullShared())) return false;
     return pushed;
   } catch {

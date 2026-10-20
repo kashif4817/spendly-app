@@ -1,3 +1,4 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, SectionList, StyleSheet, TextInput, View } from 'react-native';
@@ -12,7 +13,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { TransactionRow } from '@/components/transaction-row';
 import { MoneyColors } from '@/constants/app';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { BottomTabInset, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
   getAllTransactions,
   getBudgetProgress,
@@ -22,7 +23,7 @@ import {
   OVERALL_BUDGET,
   type EntryType,
 } from '@/db';
-import { useCategoryEmoji, useQuery } from '@/db/hooks';
+import { useCategoryIcon, useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
 import { useWeekStart } from '@/hooks/use-week-start';
 import {
@@ -54,7 +55,7 @@ export default function ReportsScreen() {
     if (params.breakdown === 'in' || params.breakdown === 'out') setBreakdown(params.breakdown);
   }, [params.breakdown, params.at]);
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
-  const emojiFor = useCategoryEmoji();
+  const iconFor = useCategoryIcon();
   const theme = useTheme();
   const weekStartsOn = useWeekStart();
 
@@ -256,9 +257,16 @@ export default function ReportsScreen() {
           {slices.map((slice) => (
             <View key={slice.category} style={styles.slice}>
               <View style={styles.sliceTop}>
-                <ThemedText type="small" style={styles.sliceLabel} numberOfLines={1}>
-                  {emojiFor(slice.category, breakdown)}  {slice.category}
-                </ThemedText>
+                <View style={styles.sliceLabelRow}>
+                  <MaterialIcons
+                    name={iconFor(slice.category, breakdown)}
+                    size={16}
+                    color={theme.textSecondary}
+                  />
+                  <ThemedText type="small" style={styles.sliceLabel} numberOfLines={1}>
+                    {slice.category}
+                  </ThemedText>
+                </View>
                 <ThemedText type="smallBold">{formatMoney(slice.total)}</ThemedText>
               </View>
               <HBar value={slice.total} max={maxSlice} color={breakdownColor} />
@@ -286,11 +294,8 @@ export default function ReportsScreen() {
           {budgets.map((b) => (
             <BudgetBar
               key={b.category || '(overall)'}
-              label={
-                b.category === OVERALL_BUDGET
-                  ? '🎯  All spending'
-                  : `${emojiFor(b.category, 'out')}  ${b.category}`
-              }
+              label={b.category === OVERALL_BUDGET ? 'All spending' : b.category}
+              icon={b.category === OVERALL_BUDGET ? 'donut-large' : iconFor(b.category, 'out')}
               spent={b.spent}
               budget={b.budget}
             />
@@ -310,7 +315,7 @@ export default function ReportsScreen() {
         autoCapitalize="none"
         autoCorrect={false}
         clearButtonMode="while-editing"
-        style={[styles.search, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+        style={[styles.search, theme.glassInput, { color: theme.text }]}
       />
     </View>
   );
@@ -332,7 +337,7 @@ export default function ReportsScreen() {
           renderItem={({ item }) => (
             <TransactionRow
               transaction={item}
-              emoji={emojiFor(item.category, item.type)}
+              icon={iconFor(item.category, item.type)}
               onPress={() => router.push({ pathname: '/entry', params: { id: item.id } })}
             />
           )}
@@ -340,7 +345,7 @@ export default function ReportsScreen() {
             <View style={styles.empty}>
               {search ? (
                 <>
-                  <ThemedText style={styles.emptyEmoji}>🔍</ThemedText>
+                  <MaterialIcons name="search-off" size={34} color={theme.textSecondary} style={styles.emptyIcon} />
                   <ThemedText type="smallBold">No matches</ThemedText>
                   <ThemedText type="small" themeColor="textSecondary" style={styles.emptyHint}>
                     Nothing found for “{search.trim()}”.
@@ -348,7 +353,7 @@ export default function ReportsScreen() {
                 </>
               ) : (
                 <>
-                  <ThemedText style={styles.emptyEmoji}>📭</ThemedText>
+                  <MaterialIcons name="receipt-long" size={34} color={theme.textSecondary} style={styles.emptyIcon} />
                   <ThemedText type="smallBold">Nothing recorded yet</ThemedText>
                   <ThemedText type="small" themeColor="textSecondary" style={styles.emptyHint}>
                     Your entries will show up here, grouped by day.
@@ -407,7 +412,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   chartCard: {
-    borderRadius: 20,
+    borderRadius: Radius.card,
     padding: Spacing.four,
     gap: Spacing.three,
   },
@@ -438,6 +443,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: Spacing.three,
+  },
+  sliceLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    flex: 1,
+    minWidth: 0,
   },
   sliceLabel: {
     flex: 1,
@@ -483,7 +495,7 @@ const styles = StyleSheet.create({
     marginTop: Spacing.one,
   },
   budgetCard: {
-    borderRadius: 20,
+    borderRadius: Radius.card,
     padding: Spacing.four,
     gap: Spacing.three,
   },
@@ -492,7 +504,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
   },
   search: {
-    borderRadius: 12,
+    borderRadius: Radius.medium,
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.three,
     fontSize: 16,
@@ -502,9 +514,8 @@ const styles = StyleSheet.create({
     gap: Spacing.one,
     paddingVertical: Spacing.six,
   },
-  emptyEmoji: {
-    fontSize: 40,
-    marginBottom: Spacing.one,
+  emptyIcon: {
+    marginBottom: Spacing.two,
   },
   emptyHint: {
     textAlign: 'center',

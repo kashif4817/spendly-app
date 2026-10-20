@@ -20,7 +20,6 @@
 import * as Crypto from 'expo-crypto';
 
 import {
-  applyRemoteRows,
   cacheSharedProfile,
   deleteSharedBookLocally,
   renameSharedBookLocally,
@@ -34,7 +33,7 @@ import {
   type SharedBook,
 } from '@/db';
 import { supabase } from '@/lib/supabase';
-import { PULL_BATCH_SIZE } from '@/sync/config';
+import { foldCursors, pullTable } from '@/sync/pull';
 
 /** Raised with a message the UI can show as-is. */
 export class SharedBookError extends Error {}
@@ -159,60 +158,32 @@ async function cacheMemberProfiles(): Promise<void> {
   if (data.length > 0) notifyDbChanged();
 }
 
-/** True when Supabase says the table isn't there — see sync/engine.ts. */
-function isMissingTable(error: { code?: string; message?: string } | null): boolean {
-  if (!error) return false;
-  if (error.code === '42P01' || error.code === 'PGRST205') return true;
-  const message = (error.message ?? '').toLowerCase();
-  return message.includes('does not exist') || message.includes('schema cache');
-}
-
 /**
  * Fetch everything in your books that changed since the shared cursor.
  *
  * Note the absence of any `.eq('user_id', …)`: RLS decides what you may see, so
  * asking for "all shared entries" returns exactly the ones from your books.
+ * The three tables go out together — books, memberships and entries have no
+ * bearing on each other's requests, and this is the pull the book screen
+ * waits on, so its latency is the one the user actually feels.
  */
 export async function pullShared(): Promise<boolean> {
   const cursor = getSharedCursor();
-  let maxUpdatedAt = cursor;
 
   try {
-    for (const table of SHARED_TABLES) {
-      let pageCursor = cursor;
+    const results = await Promise.allSettled(
+      SHARED_TABLES.map((table) => pullTable(table, cursor))
+    );
 
-      for (;;) {
-        let query = supabase
-          .from(table)
-          .select('*')
-          .order('updated_at', { ascending: true })
-          .limit(PULL_BATCH_SIZE);
-        if (pageCursor) query = query.gt('updated_at', pageCursor);
+    const newest = foldCursors(cursor, results);
+    if (newest === false) return false;
 
-        const { data, error } = await query;
-        if (error) {
-          // Shared books not installed on the server yet — skip the whole
-          // feature rather than failing the personal sync alongside it.
-          if (isMissingTable(error)) break;
-          return false;
-        }
-        if (!data || data.length === 0) break;
-
-        applyRemoteRows(table, data as any);
-
-        pageCursor = data[data.length - 1].updated_at as string;
-        if (!maxUpdatedAt || new Date(pageCursor).getTime() > new Date(maxUpdatedAt).getTime()) {
-          maxUpdatedAt = pageCursor;
-        }
-        if (data.length < PULL_BATCH_SIZE) break;
-      }
-    }
-
+    // Only worth a request when a member turned up that we have no name for.
     await cacheMemberProfiles();
+
+    if (newest && newest !== cursor) setSharedCursor(newest);
+    return true;
   } catch {
     return false; // offline — try again on the next cycle
   }
-
-  if (maxUpdatedAt && maxUpdatedAt !== cursor) setSharedCursor(maxUpdatedAt);
-  return true;
 }
