@@ -52,17 +52,19 @@ export function AuroraBackground({ children }: { children?: React.ReactNode }) {
 /**
  * The mesh for ONE navigation scene.
  *
- * The scene runs the WHOLE window, header included, because the stack sets
- * `headerTransparent` — so the mesh is a plain absolute fill with no geometry
- * to get right. Two earlier attempts did have geometry, and both were wrong:
- * sizing the layer to the window height left the flat base showing below a
- * line about three quarters down, and stretching it to the scene's bottom
- * fixed the body but left the header strip see-through, so one screen's title
- * was still drawn over the next one's mid-push.
+ * A scene's box begins below the header, so painting the mesh into it with a
+ * plain `flex: 1` restarts the gradient on that line — the header is
+ * transparent and shows the root mesh, the content shows its own, and the two
+ * are drawn from different parts of the same gradient. The join shows. So the
+ * layer is stretched to the scene's bottom and pulled up past its top by the
+ * header, which gives it the same geometry the root mesh has; the clip keeps
+ * it from painting over the header itself.
  *
- * A floating header would drop every screen's content behind it, so the
- * padding here gives that space back — in one place, rather than in each of
- * the sixteen screens.
+ * This covers the scene but NOT the header strip, which stays see-through for
+ * the length of a push. Making the scene cover it needs `headerTransparent`,
+ * and that zeroes the reported header height, so the padding that would give
+ * the space back is zero and every screen renders behind its own header. See
+ * the stack's screenOptions.
  *
  * It is OPAQUE, which the scenes were not. A see-through scene has nothing to
  * hide the screen beneath it, and navigation keeps that screen mounted for the
@@ -81,13 +83,12 @@ export function SceneBackground({ children }: { children?: React.ReactNode }) {
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
 
   return (
-    <View style={[styles.fill, { backgroundColor: theme.background }]}>
+    <View style={[styles.fill, styles.clip, { backgroundColor: theme.background }]}>
       <View
         pointerEvents="none"
-        style={[styles.absolute, { experimental_backgroundImage: theme.mesh }]}
+        style={[styles.sceneMesh, { top: -headerHeight, experimental_backgroundImage: theme.mesh }]}
       />
-      {/* 0 on the tab screens, which show no header and inset themselves. */}
-      <View style={[styles.fill, { paddingTop: headerHeight }]}>{children}</View>
+      {children}
     </View>
   );
 }
@@ -360,6 +361,18 @@ export function GlassDivider({ style }: { style?: ViewStyle }) {
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   absolute: { ...StyleSheet.absoluteFillObject },
+  // Stops a scene's mesh, which reaches up past the scene's top edge, painting
+  // over the header.
+  clip: { overflow: 'hidden' },
+  // Stretched between `top` and `bottom` rather than given a height.
+  //
+  // It was `height: useWindowDimensions().height` once, on the reasoning that
+  // a scene plus its header is one window tall. That height does not match the
+  // scene box, and the mesh ran out about three quarters of the way down every
+  // screen with the flat base showing below the line. Anchored to the scene's
+  // own bottom edge it cannot come up short, and the gradient still spans
+  // scene + header, which is the geometry the root mesh has.
+  sceneMesh: { position: 'absolute', left: 0, right: 0, bottom: 0 },
   // Glass brightens under a finger instead of fading — dimming a translucent
   // pane turns it muddy rather than reading as a press.
   pressedGlass: {

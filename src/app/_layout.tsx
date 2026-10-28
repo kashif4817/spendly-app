@@ -77,15 +77,20 @@ export default function RootLayout() {
                     // See SceneBackground for why this cannot be a contentStyle.
                     screenLayout={({ children }) => <SceneBackground>{children}</SceneBackground>}
                     screenOptions={{
-                      // The header floats, so the scene runs the full window
-                      // and its mesh paints the header strip too.
+                      // The header stays transparent so the root mesh shows
+                      // through it, continuous with each scene's own below.
                       //
-                      // Leaving the header in the layout meant the scene began
-                      // below it, and the strip itself stayed see-through: one
-                      // screen's title was drawn over the next one's for the
-                      // whole push. SceneBackground pads the content back down
-                      // by the header height, so nothing ends up behind it.
-                      headerTransparent: true,
+                      // NOT `headerTransparent`. That was tried, to make the
+                      // scene cover the header strip and stop one screen's
+                      // title being drawn over the next one's mid-push. Once
+                      // the header stops taking layout space its reported
+                      // height goes to 0, so the padding meant to give that
+                      // space back was 0 too and every pushed screen rendered
+                      // its content behind the floating header.
+                      //
+                      // The strip therefore still shows the outgoing screen
+                      // for the length of a push. It is transient and costs a
+                      // frame; the alternative broke every screen outright.
                       headerStyle: { backgroundColor: 'transparent' },
                       headerShadowVisible: false,
                       // A base under the mesh, so a scene is opaque even for
