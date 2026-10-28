@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { AddButton } from '@/components/add-button';
+import { UnreadBadge } from '@/components/chat';
 import { GlassChip } from '@/components/glass';
 import { PromptModal } from '@/components/prompt-modal';
 import { ThemedText } from '@/components/themed-text';
@@ -29,11 +30,24 @@ import {
 } from '@/db';
 import { useQuery } from '@/db/hooks';
 import { usePeopleView } from '@/hooks/use-people-view';
+import { BalanceEye } from '@/components/balance-eye';
+import { useBalanceCovered } from '@/hooks/use-balance-privacy';
 import { useTheme } from '@/hooks/use-theme';
+import { useLock } from '@/lock/provider';
 import { formatRelativeDay } from '@/lib/date';
 import { confirm, notify } from '@/lib/confirm';
-import { formatMoney } from '@/lib/money';
+import {
+  bookScope,
+  isBalanceCovered,
+  personScope,
+  renameBalanceScope,
+  toggleBalanceCover,
+  TOTAL_PAYABLE_SCOPE,
+  TOTAL_RECEIVABLE_SCOPE,
+} from '@/lib/balance-privacy';
+import { formatMoney, HIDDEN_AMOUNT } from '@/lib/money';
 import { setPeopleView, type PeopleView } from '@/lib/people-view';
+import { shareBookBalance, sharePersonBalance } from '@/lib/share-balance';
 import { useSync } from '@/sync/provider';
 import { leaveSharedBook, renameSharedBook, SharedBookError } from '@/sync/shared';
 
@@ -72,11 +86,20 @@ type Row = PersonBalance & {
   bookId?: string;
   /** A shared book nobody has joined yet. */
   pending?: boolean;
+  /** Unread chat messages in a shared book. */
+  unread?: number;
   /** Stable list key — two books could carry the same display name. */
   key: string;
 };
 
 const isShared = (row: Row): boolean => !!row.bookId;
+
+/**
+ * Which balance this row is. A book is keyed by id because it can be renamed;
+ * a person by the name their entries are filed under, which is their identity.
+ */
+const rowScope = (row: Row): string =>
+  row.bookId ? bookScope(row.bookId) : personScope(row.person);
 
 const isSettled = (person: PersonBalance) => Math.abs(person.balance) < SETTLED_EPSILON;
 
@@ -115,6 +138,11 @@ function matchesFilter(person: Row, filter: Filter): boolean {
 export default function PeopleScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const { balancePin, hasPin } = useLock();
+  // The two summaries are covered on their own, not derived from whoever
+  // happens to be hidden in the list below them.
+  const getCovered = useBalanceCovered(TOTAL_RECEIVABLE_SCOPE);
+  const payCovered = useBalanceCovered(TOTAL_PAYABLE_SCOPE);
   const { status } = useSync();
   const view = usePeopleView();
 
@@ -147,6 +175,7 @@ export default function PeopleScreen() {
       archived: book.archived,
       bookId: book.id,
       pending: book.pending,
+      unread: book.unread,
       key: `book:${book.id}`,
     }));
 
@@ -258,11 +287,17 @@ export default function PeopleScreen() {
       return;
     }
 
+    let renamed: string;
     try {
-      renamePerson(renameFor.person, name);
+      // It returns the name it actually stored, which is the one the scope has
+      // to match — re-trimming here would be a second guess at its rules.
+      renamed = renamePerson(renameFor.person, name);
     } catch (error) {
       return (error as Error).message;
     }
+    // Their scope is their name, so it has to move with them — otherwise a
+    // rename quietly uncovers a balance they had hidden.
+    renameBalanceScope(personScope(renameFor.person), personScope(renamed));
     setRenameFor(null);
   };
 
@@ -321,9 +356,24 @@ export default function PeopleScreen() {
     });
   };
 
+  /**
+   * Covering a balance from the list itself, so you don't have to open someone
+   * to hide them. Same policy as the eye on their statement.
+   */
+  const balanceAction = (row: Row): SheetAction => {
+    const scope = rowScope(row);
+    const covered = isBalanceCovered(scope);
+    return {
+      label: covered ? 'Show balance' : 'Hide balance',
+      icon: covered ? 'visibility' : 'visibility-off',
+      onPress: () => toggleBalanceCover(scope, balancePin && hasPin),
+    };
+  };
+
   const sheetActions = (person: Row): SheetAction[] =>
     isShared(person)
       ? [
+          balanceAction(person),
           {
             label: person.pinned ? 'Unpin from top' : 'Pin to top',
             icon: 'push-pin',
@@ -345,6 +395,17 @@ export default function PeopleScreen() {
             onPress: () => open(person),
           },
           {
+            label: person.unread ? `Chat (${person.unread} unread)` : 'Chat',
+            icon: 'chat-bubble-outline',
+            onPress: () =>
+              router.push(`/shared-chat?book=${encodeURIComponent(person.bookId!)}` as Href),
+          },
+          {
+            label: 'Share balance',
+            icon: 'share',
+            onPress: () => void shareBookBalance(person.bookId!),
+          },
+          {
             // Leaving, not deleting: the other member's copy is not yours to
             // remove, so the wording has to say what actually happens.
             label: 'Leave book',
@@ -354,6 +415,7 @@ export default function PeopleScreen() {
           },
         ]
       : [
+          balanceAction(person),
           {
             label: person.pinned ? 'Unpin from top' : 'Pin to top',
             icon: 'push-pin',
@@ -373,6 +435,11 @@ export default function PeopleScreen() {
             label: 'Open statement',
             icon: 'receipt-long',
             onPress: () => openPerson(person.person),
+          },
+          {
+            label: 'Share balance',
+            icon: 'share',
+            onPress: () => void sharePersonBalance(person.person),
           },
           {
             label: 'Delete',
@@ -439,26 +506,32 @@ export default function PeopleScreen() {
 
               <View style={styles.tiles}>
                 <View style={[styles.tile, theme.glass]}>
-                  <ThemedText type="small" themeColor="textSecondary">
-                    {filter === 'archived' ? 'Archived · you’ll get' : 'You’ll get'}
-                  </ThemedText>
+                  <View style={styles.tileHead}>
+                    <ThemedText type="small" themeColor="textSecondary" style={styles.tileHeadText}>
+                      {filter === 'archived' ? 'Archived · you’ll get' : 'You’ll get'}
+                    </ThemedText>
+                    <BalanceEye scope={TOTAL_RECEIVABLE_SCOPE} size={22} what="what you’ll get" />
+                  </View>
                   <ThemedText style={[styles.tileValue, { color: MoneyColors.in }]}>
-                    {formatMoney(shownTotals.receivable)}
+                    {getCovered ? HIDDEN_AMOUNT : formatMoney(shownTotals.receivable)}
                   </ThemedText>
                 </View>
                 <View style={[styles.tile, theme.glass]}>
-                  <ThemedText type="small" themeColor="textSecondary">
-                    {filter === 'archived' ? 'Archived · you’ll pay' : 'You’ll pay'}
-                  </ThemedText>
+                  <View style={styles.tileHead}>
+                    <ThemedText type="small" themeColor="textSecondary" style={styles.tileHeadText}>
+                      {filter === 'archived' ? 'Archived · you’ll pay' : 'You’ll pay'}
+                    </ThemedText>
+                    <BalanceEye scope={TOTAL_PAYABLE_SCOPE} size={22} what="what you’ll pay" />
+                  </View>
                   <ThemedText style={[styles.tileValue, { color: MoneyColors.out }]}>
-                    {formatMoney(shownTotals.payable)}
+                    {payCovered ? HIDDEN_AMOUNT : formatMoney(shownTotals.payable)}
                   </ThemedText>
                 </View>
               </View>
 
               <View style={styles.searchRow}>
                 <View style={[styles.searchBar, theme.glass]}>
-                  <MaterialIcons name="search" size={20} color={theme.textSecondary} />
+                  <MaterialIcons name="search" size={18} color={theme.textSecondary} />
                   <TextInput
                     value={search}
                     onChangeText={setSearch}
@@ -480,7 +553,7 @@ export default function PeopleScreen() {
                       hitSlop={8}
                       accessibilityRole="button"
                       accessibilityLabel="Clear search">
-                      <MaterialIcons name="close" size={20} color={theme.textSecondary} />
+                      <MaterialIcons name="close" size={18} color={theme.textSecondary} />
                     </Pressable>
                   )}
                 </View>
@@ -501,7 +574,7 @@ export default function PeopleScreen() {
                         accessibilityState={{ selected }}>
                         <MaterialIcons
                           name={icon}
-                          size={20}
+                          size={18}
                           color={selected ? theme.accent : theme.textSecondary}
                         />
                       </Pressable>
@@ -632,11 +705,14 @@ function Avatar({
   color,
   size,
   shared,
+  unread = 0,
 }: {
   initial: string;
   color: string;
   size: number;
   shared: boolean;
+  /** Unread messages in this book, shown opposite the shared mark. */
+  unread?: number;
 }) {
   const theme = useTheme();
   const badge = Math.round(size * 0.42);
@@ -667,6 +743,9 @@ function Avatar({
           <MaterialIcons name="group" size={Math.round(badge * 0.64)} color="#ffffff" />
         </View>
       )}
+      {/* Top corner, opposite the shared mark: the two never collide, and the
+          count costs the row no width — the same reason the mark hangs here. */}
+      <UnreadBadge count={unread} style={styles.avatarUnread} />
     </View>
   );
 }
@@ -727,6 +806,7 @@ type RowProps = {
 /** The roomy default row: avatar, name, standing, amount. */
 function PersonRow({ person, onPress, onLongPress, onMore }: RowProps & { onMore: () => void }) {
   const theme = useTheme();
+  const covered = useBalanceCovered(rowScope(person));
   const { settled, fresh, color, label, initial } = useStanding(person);
   const shared = isShared(person);
 
@@ -741,12 +821,15 @@ function PersonRow({ person, onPress, onLongPress, onMore }: RowProps & { onMore
         pressed && styles.pressed,
       ]}
       accessibilityRole="button"
-      accessibilityLabel={`${person.person}${shared ? ', shared book' : ''}. ${label}.`}>
+      accessibilityLabel={`${person.person}${shared ? ', shared book' : ''}. ${label}.${
+        person.unread ? ` ${person.unread} unread messages.` : ''
+      }`}>
       <Avatar
         initial={initial}
         color={settled ? theme.textSecondary : color}
         size={46}
         shared={shared}
+        unread={person.unread}
       />
 
       <View style={styles.middle}>
@@ -764,7 +847,7 @@ function PersonRow({ person, onPress, onLongPress, onMore }: RowProps & { onMore
 
       <View style={styles.right}>
         <ThemedText type="smallBold" style={[styles.balanceValue, { color }]} numberOfLines={1}>
-          {formatMoney(Math.abs(person.balance))}
+          {covered ? HIDDEN_AMOUNT : formatMoney(Math.abs(person.balance))}
         </ThemedText>
         <Pressable
           onPress={onMore}
@@ -781,6 +864,7 @@ function PersonRow({ person, onPress, onLongPress, onMore }: RowProps & { onMore
 /** Half-width tile for the two-column grid. */
 function PersonTile({ person, onPress, onLongPress }: RowProps) {
   const theme = useTheme();
+  const covered = useBalanceCovered(rowScope(person));
   const { settled, color, label, initial } = useStanding(person);
   const shared = isShared(person);
 
@@ -804,6 +888,7 @@ function PersonTile({ person, onPress, onLongPress }: RowProps) {
         color={settled ? theme.textSecondary : color}
         size={48}
         shared={shared}
+        unread={person.unread}
       />
       <ThemedText type="smallBold" numberOfLines={1} style={styles.tileName}>
         {person.person}
@@ -813,7 +898,7 @@ function PersonTile({ person, onPress, onLongPress }: RowProps) {
         {label}
       </ThemedText>
       <ThemedText type="smallBold" style={[styles.tileAmount, { color }]} numberOfLines={1}>
-        {formatMoney(Math.abs(person.balance))}
+        {covered ? HIDDEN_AMOUNT : formatMoney(Math.abs(person.balance))}
       </ThemedText>
     </Pressable>
   );
@@ -904,8 +989,14 @@ const styles = StyleSheet.create({
     paddingBottom: BottomTabInset + Spacing.six,
   },
   header: {
-    gap: Spacing.one,
+    // One rhythm for the whole header. Each block used to carry its own
+    // margin, which stacked on top of this gap and left uneven steps between
+    // the title, the tiles, the search and the chips.
+    gap: Spacing.two,
     paddingTop: Spacing.two,
+    // Matches the gap between two cards, so the chips sit the same distance
+    // from the first row as the rows sit from each other.
+    paddingBottom: Spacing.two,
   },
   titleRow: {
     flexDirection: 'row',
@@ -931,44 +1022,63 @@ const styles = StyleSheet.create({
   tiles: {
     flexDirection: 'row',
     gap: Spacing.two,
-    marginTop: Spacing.three,
-    marginBottom: Spacing.two,
+    // The only block that earns more than the header gap: it follows the
+    // 32px title, which needs a little air under it.
+    marginTop: Spacing.one,
   },
   tile: {
     flex: 1,
-    borderRadius: Radius.card,
-    padding: Spacing.three,
-    gap: 2,
+    // A shorter tile wants a tighter corner — Radius.card on this height
+    // read as a pill with the ends cut off.
+    borderRadius: Radius.medium,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    gap: 1,
+  },
+  /** Label and its eye share a line, so the tile grows by the button, not a row. */
+  tileHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  tileHeadText: {
+    flex: 1,
   },
   tileValue: {
-    fontSize: 20,
-    lineHeight: 26,
+    fontSize: 18,
+    lineHeight: 23,
     fontWeight: '700',
   },
   searchRow: {
     flexDirection: 'row',
-    alignItems: 'stretch',
+    // Both children now set their own height, so there is nothing to stretch.
+    alignItems: 'center',
     gap: Spacing.two,
-    marginBottom: Spacing.two,
   },
   searchBar: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
-    borderRadius: Radius.medium,
-    paddingHorizontal: Spacing.three,
+    // Fixed rather than grown from the input's padding: the bar and the view
+    // switch beside it have to agree, and a TextInput's intrinsic height
+    // differs between the platforms.
+    height: 40,
+    // Full round, so it reads as one family with the filter chips below it
+    // instead of as a box.
+    borderRadius: Radius.full,
+    paddingHorizontal: 14,
   },
   searchInput: {
     flex: 1,
-    paddingVertical: Spacing.three,
-    fontSize: 15,
+    // The bar sets the height; padding here would fight it.
+    paddingVertical: 0,
+    fontSize: 14,
   },
   chipRow: {
     // Bleed to the screen edges so chips scroll out of view rather than
     // being cut off at the content padding.
     marginHorizontal: -Spacing.four,
-    marginBottom: Spacing.two,
   },
   chips: {
     gap: Spacing.two,
@@ -985,20 +1095,24 @@ const styles = StyleSheet.create({
   // Matches the search bar's height and corners, so the two read as one row.
   viewSwitch: {
     flexDirection: 'row',
-    alignItems: 'stretch',
-    borderRadius: Radius.medium,
-    padding: Spacing.one,
+    alignItems: 'center',
+    // Same height as the search bar it sits beside: 3 + 34 + 3.
+    height: 40,
+    borderRadius: Radius.full,
+    padding: 3,
     gap: Spacing.half,
   },
   viewButton: {
-    width: 40,
-    borderRadius: 8,
+    width: 34,
+    height: 34,
+    borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
   },
   searchMeta: {
+    // Tucked up under the chips: the count belongs to the search above it,
+    // not to the list below.
     marginTop: -Spacing.one,
-    marginBottom: Spacing.two,
   },
   sectionLabel: {
     flexDirection: 'row',
@@ -1029,6 +1143,13 @@ const styles = StyleSheet.create({
   },
   avatarInitial: {
     fontWeight: '700',
+  },
+  // The same -2 the shared mark below hangs on, rather than further out: an
+  // avatar is a rounded, filled view, and Android clips what overflows one.
+  avatarUnread: {
+    position: 'absolute',
+    right: -2,
+    top: -2,
   },
   avatarBadge: {
     position: 'absolute',

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Switch, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { GlassDivider } from '@/components/glass';
 import { PinPad } from '@/components/pin-pad';
 import { confirm } from '@/lib/confirm';
 import { ThemedText } from '@/components/themed-text';
@@ -11,8 +12,11 @@ import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
   biometricAvailable,
+  disableBalancePin,
   disableLock,
   PIN_LENGTH,
+  setAppLockEnabled,
+  setBalancePinRequired,
   setBiometricEnabled,
   setPin,
 } from '@/lock/app-lock';
@@ -22,12 +26,20 @@ const DANGER = '#e5484d';
 
 type Step = 'idle' | 'create' | 'confirm';
 
+/**
+ * What the PIN being typed is FOR. There is one PIN in the app and two things
+ * that can ask for it, so the pad has to know which switch to flip once the
+ * digits check out — and 'change' flips neither.
+ */
+type Intent = 'lock' | 'balance' | 'change';
+
 export default function SecurityScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { enabled, biometric, refresh } = useLock();
+  const { hasPin, enabled, biometric, balancePin, refresh } = useLock();
 
   const [step, setStep] = useState<Step>('idle');
+  const [intent, setIntent] = useState<Intent>('lock');
   const [pin, setPinValue] = useState('');
   const [firstPin, setFirstPin] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -37,8 +49,22 @@ export default function SecurityScreen() {
     biometricAvailable().then(setBioAvailable);
   }, []);
 
-  const startCreate = () => {
+  /** Apply what the PIN was for. Split out because an existing PIN skips the pad. */
+  const applyIntent = async (which: Intent) => {
+    if (which === 'lock') await setAppLockEnabled(true);
+    else if (which === 'balance') await setBalancePinRequired(true);
+    await refresh();
+  };
+
+  const start = async (which: Intent) => {
+    // Already have a PIN? The second switch doesn't need it typed again — it is
+    // the same secret, and asking twice would imply it wasn't.
+    if (hasPin && which !== 'change') {
+      await applyIntent(which);
+      return;
+    }
     setError(null);
+    setIntent(which);
     setFirstPin('');
     setPinValue('');
     setStep('create');
@@ -60,13 +86,22 @@ export default function SecurityScreen() {
       return;
     }
     await setPin(value);
-    await refresh();
+    await applyIntent(intent);
     setStep('idle');
     setPinValue('');
   };
 
   const toggleBiometric = async (on: boolean) => {
     await setBiometricEnabled(on);
+    await refresh();
+  };
+
+  const toggleBalancePin = async (on: boolean) => {
+    if (on) {
+      await start('balance');
+      return;
+    }
+    await disableBalancePin();
     await refresh();
   };
 
@@ -84,9 +119,11 @@ export default function SecurityScreen() {
             {step === 'create' ? 'Create a PIN' : 'Confirm your PIN'}
           </ThemedText>
           <ThemedText type="small" themeColor="textSecondary" style={styles.subtitle}>
-            {step === 'create'
-              ? `Choose a ${PIN_LENGTH}-digit PIN to lock the app.`
-              : 'Enter it once more to confirm.'}
+            {step === 'confirm'
+              ? 'Enter it once more to confirm.'
+              : intent === 'balance'
+                ? `Choose a ${PIN_LENGTH}-digit PIN. The same one unlocks the app if you turn App Lock on.`
+                : `Choose a ${PIN_LENGTH}-digit PIN to lock the app.`}
           </ThemedText>
 
           <PinPad value={pin} onChange={setPinValue} onComplete={onPinComplete} />
@@ -112,33 +149,71 @@ export default function SecurityScreen() {
       <SafeAreaView style={styles.safe}>
         <View style={styles.content}>
           <ThemedText type="small" themeColor="textSecondary">
-            Lock Spendly with a PIN{bioAvailable ? ' or your fingerprint / Face ID' : ''}. You’ll
-            unlock it when you open the app after leaving it.
+            One PIN{bioAvailable ? ', or your fingerprint / Face ID' : ''} — it can lock the app, guard
+            the balances you&apos;ve hidden, or both. Hide a balance from a person or a shared
+            book&apos;s own screen.
           </ThemedText>
 
           <View style={[styles.card, theme.glass]}>
             <View style={styles.row}>
-              <ThemedText type="smallBold">App Lock</ThemedText>
+              <View style={styles.rowText}>
+                <ThemedText type="smallBold">App Lock</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary">
+                  Unlock when you open the app after leaving it
+                </ThemedText>
+              </View>
               <ThemedText type="small" style={{ color: enabled ? theme.accent : theme.textSecondary }}>
                 {enabled ? 'On' : 'Off'}
               </ThemedText>
             </View>
 
-            {enabled && bioAvailable && (
-              <View style={styles.row}>
-                <ThemedText type="small">Use fingerprint / Face ID</ThemedText>
-                <Switch
-                  value={biometric}
-                  onValueChange={toggleBiometric}
-                  trackColor={{ true: theme.accent }}
-                />
+            <GlassDivider />
+
+            {/* The second thing allowed to ask for the PIN. It stands alone:
+                plenty of people want a balance covered in public without a gate
+                on the whole app every time they open it. Which balances are
+                hidden is chosen per person or book, on their own statement. */}
+            <View style={styles.row}>
+              <View style={styles.rowText}>
+                <ThemedText type="smallBold">Require PIN to see balances</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary">
+                  {balancePin
+                    ? 'A hidden balance needs your PIN, and covers itself again'
+                    : 'A hidden balance shows on a tap, with no PIN'}
+                </ThemedText>
               </View>
+              <Switch
+                value={balancePin}
+                onValueChange={toggleBalancePin}
+                trackColor={{ true: theme.accent }}
+              />
+            </View>
+
+            {/* Offered as soon as a PIN exists, because biometrics now stand in
+                for it on the balance prompt as well as on the lock screen. */}
+            {hasPin && bioAvailable && (
+              <>
+                <GlassDivider />
+                <View style={styles.row}>
+                  <View style={styles.rowText}>
+                    <ThemedText type="smallBold">Use fingerprint / Face ID</ThemedText>
+                    <ThemedText type="small" themeColor="textSecondary">
+                      Instead of typing the PIN
+                    </ThemedText>
+                  </View>
+                  <Switch
+                    value={biometric}
+                    onValueChange={toggleBiometric}
+                    trackColor={{ true: theme.accent }}
+                  />
+                </View>
+              </>
             )}
           </View>
 
           {!enabled ? (
             <Pressable
-              onPress={startCreate}
+              onPress={() => start('lock')}
               style={({ pressed }) => [
                 styles.primaryBtn,
                 { backgroundColor: theme.accent },
@@ -147,31 +222,32 @@ export default function SecurityScreen() {
               <ThemedText style={styles.primaryLabel}>Turn on App Lock</ThemedText>
             </Pressable>
           ) : (
-            <>
-              <Pressable
-                onPress={startCreate}
-                style={({ pressed }) => [
-                  styles.primaryBtn,
-                  { backgroundColor: theme.accent },
-                  pressed && styles.pressed,
-                ]}>
-                <ThemedText style={styles.primaryLabel}>Change PIN</ThemedText>
-              </Pressable>
-              <Pressable onPress={() =>
+            <Pressable
+              onPress={() =>
                 confirm({
                   title: 'Turn off App Lock?',
-                  message:
-                    'Anyone who opens the app will be able to see your money. You can turn it back on anytime.',
+                  message: balancePin
+                    ? 'The app will open without a PIN. Your balances stay covered, and your PIN is kept for those.'
+                    : 'Anyone who opens the app will be able to see your money. You can turn it back on anytime.',
                   confirmLabel: 'Turn off',
                   destructive: true,
                   onConfirm: turnOff,
                 })
-              } style={styles.textBtn} hitSlop={8}>
-                <ThemedText type="smallBold" style={{ color: DANGER }}>
-                  Turn off App Lock
-                </ThemedText>
-              </Pressable>
-            </>
+              }
+              style={styles.textBtn}
+              hitSlop={8}>
+              <ThemedText type="smallBold" style={{ color: DANGER }}>
+                Turn off App Lock
+              </ThemedText>
+            </Pressable>
+          )}
+
+          {hasPin && (
+            <Pressable onPress={() => start('change')} style={styles.textBtn} hitSlop={8}>
+              <ThemedText type="smallBold" style={{ color: theme.accent }}>
+                Change PIN
+              </ThemedText>
+            </Pressable>
           )}
 
           <Pressable onPress={() => router.back()} style={styles.textBtn} hitSlop={8}>
@@ -221,6 +297,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: Spacing.three,
+  },
+  /** Lets a two-line label wrap instead of shoving the switch off the row. */
+  rowText: {
+    flex: 1,
+    gap: 1,
   },
   primaryBtn: {
     borderRadius: Radius.medium,

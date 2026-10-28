@@ -29,6 +29,7 @@ import {
 } from '@/db';
 import { googleSignInIdToken, googleSignOut, isGoogleConfigured } from '@/lib/google';
 import { ensureDefaultReminder } from '@/lib/notifications';
+import { registerPushToken, unregisterPushToken } from '@/lib/push';
 import { avatarUrl as getSignedAvatarUrl, getAvatarPath, upsertProfile } from '@/lib/profile';
 import { supabase } from '@/lib/supabase';
 import { getLastSyncFailure, runSharedSync, runSync, type SyncFailure } from '@/sync/engine';
@@ -272,7 +273,18 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
 
       // Best-effort profile row + default reminder + avatar (never block login).
       upsertProfile(userId, user.email ?? null, metaString(user, 'full_name', 'name')).catch(() => {});
-      ensureDefaultReminder().catch(() => {});
+      // Then, once that has settled, where to reach this device about a
+      // shared-book message while the app isn't running. Re-run on every
+      // sign-in: the OS can rotate a token, and a token belongs to an account
+      // rather than to the install.
+      //
+      // Chained rather than fired alongside, because both of these can be the
+      // call that asks for notification permission — and two permission
+      // requests racing each other is how one of them comes back denied.
+      ensureDefaultReminder()
+        .catch(() => {})
+        .then(() => registerPushToken(userId))
+        .catch(() => {});
       reloadAvatar();
 
       const synced = await run('full', true);
@@ -420,6 +432,10 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const logOut = useCallback(async () => {
     clearUndo();
     stopRealtime();
+    // Before the session goes: retiring the token is a write, and RLS has
+    // nothing to check it against once we're signed out. Otherwise the next
+    // person to use this phone would be rung about this account's chats.
+    await unregisterPushToken();
     await googleSignOut();
     try {
       await supabase.auth.signOut();

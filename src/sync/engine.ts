@@ -19,6 +19,7 @@ import {
   isSharedTable,
   removeOutboxEntry,
   setSyncCursor,
+  SHARED_OWNER_COLUMN,
   SHARED_TABLES,
   SYNC_TABLES,
   type AnyTable,
@@ -81,11 +82,12 @@ function buildUploadRow(table: AnyTable, local: Record<string, any>, userId: str
 
 /**
  * The column naming who may change a row. On personal tables that's the owner;
- * on shared tables only the author can touch their own entry, which is what
- * stops either member rewriting the other's record.
+ * on shared tables it's whoever wrote the row — the author of an entry, the
+ * sender of a message — which is what stops either member rewriting the
+ * other's record.
  */
 function ownerColumn(table: AnyTable): string {
-  return isSharedTable(table) ? 'author_id' : 'user_id';
+  return isSharedTable(table) ? SHARED_OWNER_COLUMN[table] : 'user_id';
 }
 
 /** Send queued local changes to Supabase. Stops (returns false) on the first error. */

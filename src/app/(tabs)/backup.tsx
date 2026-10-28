@@ -205,8 +205,8 @@ export default function SettingsScreen() {
             <GlassDivider />
             <MenuRow
               icon="lock-outline"
-              label="App Lock"
-              hint="PIN or fingerprint"
+              label="Security"
+              hint="PIN, fingerprint and hidden balances"
               value={lockEnabled ? 'On' : 'Off'}
               onPress={() => router.push('/security' as Href)}
             />

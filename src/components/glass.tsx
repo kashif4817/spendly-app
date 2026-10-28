@@ -11,6 +11,8 @@
  */
 
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { HeaderHeightContext } from '@react-navigation/elements';
+import { useContext } from 'react';
 import { Pressable, StyleSheet, View, type ViewProps, type ViewStyle } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
@@ -43,6 +45,49 @@ export function AuroraBackground({ children }: { children?: React.ReactNode }) {
         style={[styles.fill, styles.absolute, { experimental_backgroundImage: theme.mesh }]}
       />
       {children}
+    </View>
+  );
+}
+
+/**
+ * The mesh for ONE navigation scene.
+ *
+ * The scene runs the WHOLE window, header included, because the stack sets
+ * `headerTransparent` — so the mesh is a plain absolute fill with no geometry
+ * to get right. Two earlier attempts did have geometry, and both were wrong:
+ * sizing the layer to the window height left the flat base showing below a
+ * line about three quarters down, and stretching it to the scene's bottom
+ * fixed the body but left the header strip see-through, so one screen's title
+ * was still drawn over the next one's mid-push.
+ *
+ * A floating header would drop every screen's content behind it, so the
+ * padding here gives that space back — in one place, rather than in each of
+ * the sixteen screens.
+ *
+ * It is OPAQUE, which the scenes were not. A see-through scene has nothing to
+ * hide the screen beneath it, and navigation keeps that screen mounted for the
+ * whole push — so both composite together and you watch the old screen through
+ * the new one.
+ *
+ * Note this cannot be done with `experimental_backgroundImage` on the stack's
+ * `contentStyle`. That typechecks, since contentStyle is a ViewStyle, but the
+ * prop never reaches the native view: the scene comes out flat `background`
+ * with no mesh at all. It has to be a mounted View.
+ */
+export function SceneBackground({ children }: { children?: React.ReactNode }) {
+  const theme = useTheme();
+  // Read directly rather than through useHeaderHeight(), which throws when
+  // there is no header above it.
+  const headerHeight = useContext(HeaderHeightContext) ?? 0;
+
+  return (
+    <View style={[styles.fill, { backgroundColor: theme.background }]}>
+      <View
+        pointerEvents="none"
+        style={[styles.absolute, { experimental_backgroundImage: theme.mesh }]}
+      />
+      {/* 0 on the tab screens, which show no header and inset themselves. */}
+      <View style={[styles.fill, { paddingTop: headerHeight }]}>{children}</View>
     </View>
   );
 }

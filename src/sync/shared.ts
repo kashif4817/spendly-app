@@ -21,6 +21,8 @@ import * as Crypto from 'expo-crypto';
 
 import {
   cacheSharedProfile,
+  getCurrentUserId,
+  markBooksDelivered,
   deleteSharedBookLocally,
   renameSharedBookLocally,
   getSharedCursor,
@@ -180,6 +182,13 @@ export async function pullShared(): Promise<boolean> {
 
     // Only worth a request when a member turned up that we have no name for.
     await cacheMemberProfiles();
+
+    // Whatever that pull brought down is now on this device, which is exactly
+    // what the second tick on the other person's screen claims. Recorded here
+    // rather than in the chat screen because delivery does not wait for the
+    // thread to be opened — that is what the THIRD tick is for.
+    const me = getCurrentUserId();
+    if (me) markBooksDelivered(me);
 
     if (newest && newest !== cursor) setSharedCursor(newest);
     return true;

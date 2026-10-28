@@ -5,7 +5,7 @@ import { ActivityIndicator, AppState, Pressable, StyleSheet, View } from 'react-
 
 import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
-import { BottomTabInset, Radius, Spacing } from '@/constants/theme';
+import { Radius, Spacing } from '@/constants/theme';
 
 /**
  * Floating banner offering an over-the-air update once one has downloaded.
@@ -50,14 +50,9 @@ export function UpdatePrompt() {
   if (dismissed || (!isDownloading && !isUpdatePending)) return null;
 
   return (
-    <View
-      style={[
-        styles.banner,
-        {
-          backgroundColor: theme.accent,
-          bottom: BottomTabInset + Spacing.three,
-        },
-      ]}>
+    // Positioned by <BottomBanners>. This used to place itself at exactly the
+    // floating Add button's height and was drawn underneath it.
+    <View style={[styles.banner, { backgroundColor: theme.accent }]}>
       <View style={styles.left}>
         <MaterialIcons name="system-update" size={20} color="#ffffff" />
         <ThemedText style={styles.title} numberOfLines={1}>
@@ -95,9 +90,6 @@ export function UpdatePrompt() {
 
 const styles = StyleSheet.create({
   banner: {
-    position: 'absolute',
-    left: Spacing.three,
-    right: Spacing.three,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -108,11 +100,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
     minHeight: 48,
     borderRadius: Radius.full,
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 8,
+    // Lit top edge and the same shadow as every other floating surface. The
+    // elevation + shadow* props predate the move to boxShadow and drew a
+    // different shadow on Android than the rest of the app.
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.38)',
+    boxShadow: [
+      { offsetX: 0, offsetY: 10, blurRadius: 28, color: 'rgba(0,0,0,0.30)' },
+      { offsetX: 0, offsetY: 1, blurRadius: 0, color: 'rgba(255,255,255,0.45)', inset: true },
+    ],
   },
   left: {
     flexDirection: 'row',

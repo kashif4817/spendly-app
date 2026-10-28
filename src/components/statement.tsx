@@ -10,14 +10,30 @@
  * A day is ONE pane: `StatementDay` opens it, `StatementRow`s continue it, and
  * the last row closes it. That is the same card-per-group shape the Reports
  * screen uses, which is the one people said read best.
+ *
+ * COVERING MONEY: only the BALANCE covers. The entries below it never do.
+ *
+ * They did at first, on the reasoning that anyone who can read the rows can add
+ * them up. True, but it misses what the screen is for: you open a statement to
+ * read the entries, and a page of masked rows is a page with nothing on it. The
+ * figure at the top is the one someone glances over your shoulder and takes in
+ * at once, so that is the one worth covering. Summing a statement by eye is a
+ * different thing from reading it.
+ *
+ * So `scope` belongs to `StatementBalance` alone, as a required prop rather
+ * than a context: the compiler then refuses a screen that forgot to say whose
+ * balance it is drawing.
  */
 
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Pressable, StyleSheet, View } from 'react-native';
 
+import { BalanceEye } from '@/components/balance-eye';
+import { PeekingEyes } from '@/components/peeking-eyes';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Radius, Spacing } from '@/constants/theme';
+import { useBalanceToggle } from '@/hooks/use-balance-privacy';
 import { useTheme } from '@/hooks/use-theme';
 import { formatRelativeDay } from '@/lib/date';
 import { formatMoney, formatSigned } from '@/lib/money';
@@ -25,14 +41,22 @@ import { formatMoney, formatSigned } from '@/lib/money';
 /**
  * The pane a statement opens with: who owes whom, how much, and in what sense.
  * `status` is the line above the figure — a sync state, or nothing at all.
+ *
+ * Covered, the figure gives way to a pair of eyes and the card becomes one big
+ * target. The caption stays: which way the money runs is not the secret, the
+ * amount is — and a card with nothing on it but eyes loses the thread of what
+ * you were looking at.
  */
 export function StatementBalance({
+  scope,
   caption,
   amount,
   term,
   color,
   status,
 }: {
+  /** Whose balance this is — `personScope(...)` or `bookScope(...)`. */
+  scope: string;
   caption: string;
   amount: number;
   /** "Receivable" / "Payable", or null when settled. */
@@ -40,19 +64,51 @@ export function StatementBalance({
   color: string;
   status?: React.ReactNode;
 }) {
+  const { covered, needsPin, toggle } = useBalanceToggle(scope);
+
   return (
     <ThemedView type="backgroundElement" style={styles.balanceCard}>
       {status}
-      <ThemedText type="small" themeColor="textSecondary">
-        {caption}
-      </ThemedText>
-      <ThemedText style={[styles.balance, { color }]} numberOfLines={1} adjustsFontSizeToFit>
-        {formatMoney(Math.abs(amount))}
-      </ThemedText>
-      {!!term && (
-        <ThemedText type="small" themeColor="textSecondary">
-          {term}
+
+      {/* The eye rides the caption line rather than the card corner. On a
+          shared book that corner belongs to the sync chip, and the two sat on
+          top of each other. Laid out as three columns, not an absolute pin: an
+          empty gutter opposite the button is what keeps the caption centred,
+          and a long name truncates instead of running underneath it. */}
+      <View style={styles.captionRow}>
+        <View style={styles.peekGutter} />
+        <ThemedText
+          type="small"
+          themeColor="textSecondary"
+          numberOfLines={1}
+          style={styles.caption}>
+          {caption}
         </ThemedText>
+        <BalanceEye scope={scope} />
+      </View>
+
+      {covered ? (
+        <Pressable
+          onPress={toggle}
+          style={({ pressed }) => [styles.balanceBody, pressed && styles.pressed]}
+          accessibilityRole="button"
+          accessibilityLabel="Show balance">
+          <PeekingEyes size={46} />
+          <ThemedText type="small" themeColor="textSecondary" style={styles.peekHint}>
+            {needsPin ? 'Tap to show with your PIN' : 'Tap to show'}
+          </ThemedText>
+        </Pressable>
+      ) : (
+        <View style={styles.balanceBody}>
+          <ThemedText style={[styles.balance, { color }]} numberOfLines={1} adjustsFontSizeToFit>
+            {formatMoney(Math.abs(amount))}
+          </ThemedText>
+          {!!term && (
+            <ThemedText type="small" themeColor="textSecondary">
+              {term}
+            </ThemedText>
+          )}
+        </View>
       )}
     </ThemedView>
   );
@@ -149,6 +205,9 @@ export function StatementDay({
  *
  * `positive` is worked out per viewer by the caller: the same row is "you
  * paid" on one phone and "they paid" on the other.
+ *
+ * A row always shows its amount, whatever the balance above it is doing — see
+ * the note at the top of this file.
  */
 export function StatementRow({
   title,
@@ -214,11 +273,40 @@ const styles = StyleSheet.create({
     gap: Spacing.half,
     alignItems: 'center',
   },
+  /**
+   * The figure and the eyes share this block, and it holds the taller of the
+   * two — otherwise the whole screen jumps a few pixels every time you cover
+   * or uncover the balance.
+   */
+  balanceBody: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.half,
+    minHeight: 74,
+    alignSelf: 'stretch',
+  },
   balance: {
     fontSize: 42,
     fontWeight: '700',
     lineHeight: 50,
     letterSpacing: -0.5,
+  },
+  captionRow: {
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  caption: {
+    flex: 1,
+    textAlign: 'center',
+  },
+  /** Balances the button on the other side, so the caption sits dead centre. */
+  peekGutter: {
+    width: 32,
+  },
+  peekHint: {
+    marginTop: Spacing.one,
   },
   actions: {
     flexDirection: 'row',

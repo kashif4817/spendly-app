@@ -20,7 +20,17 @@
 
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
-import { applyRemoteRows, SHARED_TABLES, type SharedTable } from '@/db';
+import {
+  applyRemoteRows,
+  getCurrentUserId,
+  getSharedBook,
+  getSharedMemberName,
+  markBooksDelivered,
+  SHARED_TABLES,
+  type SharedMessage,
+  type SharedTable,
+} from '@/db';
+import { presentChatMessage } from '@/lib/notifications';
 import { supabase } from '@/lib/supabase';
 
 let channel: RealtimeChannel | null = null;
@@ -34,6 +44,40 @@ let channel: RealtimeChannel | null = null;
  * up, there is nothing a fetch would tell us that we don't already know.
  */
 let subscribed = false;
+
+/**
+ * Raise a notification for a message that just arrived over the socket.
+ *
+ * The server pushes to this device too, but only usefully when the app isn't
+ * running: a push to a foregrounded app is slower than the socket that already
+ * delivered the row, and on some devices arrives not at all. So the socket
+ * notifies for itself and the two paths de-duplicate on the message id (see
+ * lib/notifications.ts).
+ *
+ * Only INSERTs reach here, so an edited or deleted message never rings twice,
+ * and rows that come down in a pull — the whole history, on a fresh join —
+ * never ring at all.
+ */
+function announceMessage(row: SharedMessage): void {
+  const me = getCurrentUserId();
+  if (!me || row.sender_id === me) return; // your own message, echoed back
+
+  // It is on this device now, whether or not anyone looks at it — which is
+  // precisely what the sender's second tick means.
+  markBooksDelivered(me);
+
+  // A message the sender took back arrives as an UPDATE, not an insert, so it
+  // never reaches here; this is only ever something new to be told about.
+  const sender = getSharedMemberName(row.sender_id) ?? 'New message';
+  const book = getSharedBook(row.book_id)?.name?.trim();
+
+  void presentChatMessage({
+    messageId: row.id,
+    bookId: row.book_id,
+    title: book ? `${sender} · ${book}` : sender,
+    body: row.body.trim() || 'Shared an entry',
+  });
+}
 
 /** Applies one row from a change event. */
 function handleChange(table: SharedTable, payload: { eventType: string; new?: any; old?: any }): void {
@@ -50,6 +94,12 @@ function handleChange(table: SharedTable, payload: { eventType: string; new?: an
   applyRemoteRows(table, [row]);
   // applyRemoteRows already fires the change bus, so every open screen using
   // useQuery re-renders on its own — no extra wiring per screen.
+
+  // Applied first on purpose: by the time the banner appears the message is
+  // already in the thread, so opening it from the notification shows it.
+  if (table === 'shared_messages' && payload.eventType === 'INSERT' && !row.deleted) {
+    announceMessage(row as SharedMessage);
+  }
 }
 
 /**

@@ -340,4 +340,13 @@ export const TAB_BAR_HEIGHT = 64;
 export const BottomTabInset =
   Platform.select({ ios: TAB_BAR_HEIGHT + 34, android: TAB_BAR_HEIGHT + 26 }) ?? TAB_BAR_HEIGHT + 26;
 
+/**
+ * The floating "+ Add" button's height.
+ *
+ * Shared because anything else that floats above the tab bar has to step over
+ * it — the undo toast sat at the button's own height for a while, and the
+ * button simply covered the "Undo" tap target.
+ */
+export const FAB_HEIGHT = 52;
+
 export const MaxContentWidth = 800;

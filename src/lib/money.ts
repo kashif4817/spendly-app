@@ -119,3 +119,11 @@ export function formatCompact(amount: number): string {
 function oneDecimal(n: number): string {
   return n.toFixed(1).replace(/\.0$/, '');
 }
+
+/**
+ * What a figure reads as while balances are covered.
+ *
+ * Fixed width whatever the real amount was — a mask that got longer for
+ * larger numbers would leak the very thing it is covering.
+ */
+export const HIDDEN_AMOUNT = '•••••';

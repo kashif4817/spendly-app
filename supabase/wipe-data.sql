@@ -18,6 +18,9 @@ truncate table
   public.loan_payments,
   public.ledger_entries,
   public.budgets,
+  public.shared_messages,
+  public.shared_reads,
+  public.push_tokens,
   public.profiles
 restart identity cascade;
 
@@ -40,4 +43,7 @@ select
   (select count(*) from public.loan_payments)   as loan_payments,
   (select count(*) from public.ledger_entries)  as ledger_entries,
   (select count(*) from public.budgets)         as budgets,
+  (select count(*) from public.shared_messages) as shared_messages,
+  (select count(*) from public.shared_reads)    as shared_reads,
+  (select count(*) from public.push_tokens)     as push_tokens,
   (select count(*) from public.profiles)        as profiles;

@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 
@@ -111,6 +111,21 @@ export default function SharedEntryScreen() {
       },
     });
 
+  /**
+   * Take this entry to the book's chat, already attached.
+   *
+   * The other direction of the same link the chat's attach button makes: a
+   * question about an entry usually starts while looking at it, and a chat
+   * screen you have to go and find the entry in again is a chat screen the
+   * question gets asked outside the app instead.
+   */
+  const discuss = () => {
+    if (!existing) return;
+    router.push(
+      `/shared-chat?book=${encodeURIComponent(bookId)}&entry=${encodeURIComponent(existing.id)}` as Href
+    );
+  };
+
   const youPaid = payerId === me;
   const title = isEdit ? 'Edit shared entry' : 'Add shared entry';
 
@@ -179,9 +194,12 @@ export default function SharedEntryScreen() {
             disabled={!canSave}
           />
 
-          {isEdit && canEdit && (
+          {isEdit && (
             <FormLinks>
-              <FormLink label="Delete" icon="delete-outline" color={MoneyColors.out} onPress={remove} />
+              <FormLink label="Discuss" icon="chat-bubble-outline" color={theme.accent} onPress={discuss} />
+              {canEdit && (
+                <FormLink label="Delete" icon="delete-outline" color={MoneyColors.out} onPress={remove} />
+              )}
             </FormLinks>
           )}
         </ScrollView>

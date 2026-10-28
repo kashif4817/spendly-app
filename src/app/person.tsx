@@ -29,7 +29,9 @@ import { useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
 import { formatTime, groupByDay } from '@/lib/date';
 import { confirm } from '@/lib/confirm';
+import { personScope } from '@/lib/balance-privacy';
 import { formatMoney } from '@/lib/money';
+import { sharePersonBalance } from '@/lib/share-balance';
 
 const SETTLED_EPSILON = 0.005;
 
@@ -38,6 +40,8 @@ export default function PersonScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ person?: string }>();
   const person = params.person ?? '';
+  // This person's balance is covered on its own, independently of everyone else's.
+  const scope = personScope(person);
 
   const entries = useQuery(() => getPersonEntries(person), [person]);
   const balance = useQuery(() => getPersonBalance(person), [person]);
@@ -73,13 +77,26 @@ export default function PersonScreen() {
         options={{
           title: person || 'Person',
           headerRight: () => (
-            <Pressable
-              onPress={() => setMenuOpen(true)}
-              hitSlop={10}
-              accessibilityRole="button"
-              accessibilityLabel={`Options for ${person}`}>
-              <MaterialIcons name="more-vert" size={22} color={theme.text} />
-            </Pressable>
+            <View style={styles.headerActions}>
+              {/* Sending someone their balance is the errand that brings most
+                  people to this screen, so it is a button and not a menu row. */}
+              <Pressable
+                onPress={() => void sharePersonBalance(person)}
+                hitSlop={10}
+                style={styles.headerIcon}
+                accessibilityRole="button"
+                accessibilityLabel={`Share ${person}’s balance`}>
+                <MaterialIcons name="share" size={22} color={theme.text} />
+              </Pressable>
+              <Pressable
+                onPress={() => setMenuOpen(true)}
+                hitSlop={10}
+                style={styles.headerIcon}
+                accessibilityRole="button"
+                accessibilityLabel={`Options for ${person}`}>
+                <MaterialIcons name="more-vert" size={22} color={theme.text} />
+              </Pressable>
+            </View>
           ),
         }}
       />
@@ -93,6 +110,7 @@ export default function PersonScreen() {
           ListHeaderComponent={
             <View style={styles.head}>
               <StatementBalance
+                scope={scope}
                 caption={settled ? 'All settled' : owesYou ? `${person} owes you` : `You owe ${person}`}
                 amount={balance}
                 term={settled ? null : owesYou ? 'Receivable' : 'Payable'}
@@ -175,6 +193,11 @@ export default function PersonScreen() {
             icon: flags.archived ? 'unarchive' : 'archive',
             onPress: () => setPersonArchived(person, !flags.archived),
           },
+          {
+            label: 'Share balance',
+            icon: 'share',
+            onPress: () => void sharePersonBalance(person),
+          },
         ]}
         onClose={() => setMenuOpen(false)}
       />
@@ -198,6 +221,17 @@ const styles = StyleSheet.create({
   },
   head: {
     gap: Spacing.three,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+  },
+  headerIcon: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   action: {
     flex: 1,

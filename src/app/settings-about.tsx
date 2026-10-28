@@ -184,23 +184,22 @@ export default function SettingsAboutScreen() {
           </ThemedText>
 
           <ThemedView type="backgroundElement" style={styles.card}>
-            {/* When the running code was published: the time on its own, with
-                no bundle id beside it. */}
+            {/* When the running code was published.
+                The stamp sits on the full row UNDER the label rather than in a
+                column on the right: squeezed into its old 42% it wrapped "29
+                Oct 2026, 1:57 am" across two cramped lines, and the line it
+                used to share the row with said nothing the footnote at the
+                bottom of this screen doesn't already say. */}
             <View style={styles.detail}>
               <View style={[styles.detailIcon, theme.glassWeak]}>
                 <MaterialIcons name="schedule" size={19} color={theme.accentTint} />
               </View>
               <View style={styles.detailText}>
                 <ThemedText type="smallBold">Last update</ThemedText>
-                <ThemedText type="small" themeColor="textSecondary" numberOfLines={2}>
-                  {embedded
-                    ? 'Running the version that shipped with the app'
-                    : 'Delivered over the air'}
+                <ThemedText type="small" themeColor="textSecondary">
+                  {embedded ? 'Running the version that shipped with the app' : updateStamp}
                 </ThemedText>
               </View>
-              <ThemedText type="smallBold" numberOfLines={2} style={styles.detailValue}>
-                {embedded ? 'None yet' : updateStamp}
-              </ThemedText>
             </View>
 
             <GlassDivider />
@@ -313,11 +312,6 @@ const styles = StyleSheet.create({
   detailText: {
     flex: 1,
     gap: 1,
-  },
-  detailValue: {
-    flexShrink: 1,
-    textAlign: 'right',
-    maxWidth: '42%',
   },
   status: {
     flexDirection: 'row',

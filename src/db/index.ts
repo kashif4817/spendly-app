@@ -148,6 +148,52 @@ export type SharedEntry = {
   updated_at: string;
 };
 
+/**
+ * One message in a book's thread.
+ *
+ * `entry_id` is the entry the message is about, when it is about one. It is a
+ * plain id rather than a join: entries can be edited or deleted by their
+ * author, and a quote has to keep working — or degrade to "entry removed" —
+ * either way.
+ */
+export type SharedMessage = {
+  id: string;
+  book_id: string;
+  sender_id: string;
+  body: string;
+  entry_id: string | null;
+  /**
+   * When the sender retracted it, or null while it stands.
+   *
+   * Deliberately not the sync layer's `deleted` tombstone, which would drop
+   * the row and leave a silent hole in the other person's thread. The row
+   * stays and is emptied, so the thread can say a message was taken back —
+   * while the body itself is gone from both devices and from the server.
+   */
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/**
+ * How far a member has read a book's thread.
+ *
+ * One row per (book, member) holding the `created_at` of the newest message
+ * they have seen. That single timestamp answers both questions the UI asks:
+ * how many messages are unread (mine), and whether they have seen mine
+ * (theirs).
+ */
+export type SharedRead = {
+  id: string;
+  book_id: string;
+  user_id: string;
+  /** Newest message that has REACHED this member's device. */
+  delivered_at: string;
+  /** Newest message this member has actually READ. */
+  last_read_at: string;
+  updated_at: string;
+};
+
 /** A shared book rolled up for the people list. */
 export type SharedBookSummary = {
   id: string;
@@ -164,6 +210,8 @@ export type SharedBookSummary = {
   archived: number; // 1 = hidden from the main list
   /** True while nobody has redeemed the join code yet. */
   pending: boolean;
+  /** Messages from the other member that you haven't read yet. */
+  unread: number;
 };
 
 /** Sentinel category for the overall (all-spending) monthly budget. */
@@ -230,11 +278,18 @@ export type SyncTable = (typeof SYNC_TABLES)[number];
  * `user_id` column naming a single owner. They sync on their own lane with
  * their own cursor; see sync/engine.ts.
  *
- * Only `shared_entries` is ever pushed. Creating a book, joining one and
- * rotating a code all run as server-side functions, so there is nothing else
- * for a client to upload — which also means one less way to trip over RLS.
+ * Books and memberships are pulled but never pushed: creating a book, joining
+ * one and rotating a code all run as server-side functions, so there is
+ * nothing else for a client to upload — which also means one less way to trip
+ * over RLS. Entries, chat messages and read markers go both ways.
  */
-export const SHARED_TABLES = ['shared_books', 'shared_book_members', 'shared_entries'] as const;
+export const SHARED_TABLES = [
+  'shared_books',
+  'shared_book_members',
+  'shared_entries',
+  'shared_messages',
+  'shared_reads',
+] as const;
 
 export type SharedTable = (typeof SHARED_TABLES)[number];
 
@@ -244,6 +299,25 @@ export const SHARED_TABLE_COLUMNS: Record<SharedTable, string[]> = {
   shared_books: ['name', 'owner_id', 'join_code', 'code_expires_at', 'created_at'],
   shared_book_members: ['book_id', 'user_id', 'joined_at'],
   shared_entries: ['book_id', 'author_id', 'payer_id', 'amount', 'note', 'day', 'created_at'],
+  shared_messages: ['book_id', 'sender_id', 'body', 'entry_id', 'deleted_at', 'created_at'],
+  shared_reads: ['book_id', 'user_id', 'delivered_at', 'last_read_at'],
+};
+
+/**
+ * The column naming who may change a row on each shared table.
+ *
+ * Personal tables all use `user_id`; shared ones don't agree, because each
+ * says something different about who is allowed to touch a row — the author of
+ * an entry, the sender of a message, the owner of a read marker. The push half
+ * of a sync needs the right one to scope its soft-delete by, so the mapping
+ * lives here next to the columns rather than as a guess in the engine.
+ */
+export const SHARED_OWNER_COLUMN: Record<SharedTable, string> = {
+  shared_books: 'owner_id',
+  shared_book_members: 'user_id',
+  shared_entries: 'author_id',
+  shared_messages: 'sender_id',
+  shared_reads: 'user_id',
 };
 
 export function isSharedTable(table: AnyTable): table is SharedTable {
@@ -289,7 +363,7 @@ export function getCurrentUserId(): string | null {
 // live-refresh hook (see db/hooks.ts).
 const db = SQLite.openDatabaseSync('expenses.db', { enableChangeListener: true });
 
-const DATABASE_VERSION = 8;
+const DATABASE_VERSION = 10;
 
 let dbInitError: string | null = null;
 
@@ -458,6 +532,60 @@ function createSharedTables(): void {
       updated_at TEXT NOT NULL
     );
   `);
+  createChatTables();
+}
+
+/**
+ * The chat tables (also created on their own for the v8 → v9 upgrade).
+ *
+ * `shared_reads` holds one row per (book, member) rather than a flag per
+ * message: an unread count is "messages newer than my marker", which one
+ * timestamp answers, and it syncs as a single last-write-wins row so reading
+ * on one device clears the badge on the others.
+ */
+function createChatTables(): void {
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS shared_messages (
+      id TEXT PRIMARY KEY NOT NULL,
+      book_id TEXT NOT NULL,
+      sender_id TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      entry_id TEXT,
+      deleted_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_shared_messages_book
+      ON shared_messages(book_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS shared_reads (
+      id TEXT PRIMARY KEY NOT NULL,
+      book_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      delivered_at TEXT NOT NULL DEFAULT '',
+      last_read_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL,
+      UNIQUE (book_id, user_id)
+    );
+  `);
+  addChatColumns();
+}
+
+/**
+ * Columns the chat tables gained after their first release (also run on their
+ * own for the v9 → v10 upgrade).
+ *
+ * `deleted_at` is what lets a retracted message leave a line behind instead of
+ * a hole; `delivered_at` is what turns one tick into two. Both are guarded, so
+ * this is safe to run over tables that already have them.
+ */
+function addChatColumns(): void {
+  if (!hasColumn('shared_messages', 'deleted_at')) {
+    db.execSync('ALTER TABLE shared_messages ADD COLUMN deleted_at TEXT');
+  }
+  if (!hasColumn('shared_reads', 'delivered_at')) {
+    db.execSync("ALTER TABLE shared_reads ADD COLUMN delivered_at TEXT NOT NULL DEFAULT ''");
+  }
 }
 
 /**
@@ -658,7 +786,7 @@ export function migrate(): void {
     // Fresh install → create the current schema directly. Preset categories are
     // NOT seeded here; they're seeded into a brand-new account on sign-up.
     createDataTables();
-    version = 8;
+    version = 10;
   } else {
     if (version < 4) {
       // Existing pre-sync database (integer ids) → migrate its data to the
@@ -691,6 +819,20 @@ export function migrate(): void {
       // again there's nothing to backfill.
       createSharedTables();
       version = 8;
+    }
+    if (version === 8) {
+      // Introduce the shared-book chat. An empty thread and no read marker is
+      // exactly what a book that has never been chatted in looks like, so
+      // there is nothing to backfill here either.
+      createChatTables();
+      version = 9;
+    }
+    if (version === 9) {
+      // Delivery receipts and retracted-message tombstones. Existing messages
+      // stand (no deleted_at) and existing read markers start undelivered,
+      // which the next pull corrects on its own.
+      addChatColumns();
+      version = 10;
     }
   }
 
@@ -1794,6 +1936,8 @@ export function deleteSharedBookLocally(id: string): void {
   const stamp = nowIso();
   db.withTransactionSync(() => {
     db.runSync('DELETE FROM shared_entries WHERE book_id = ?', id);
+    db.runSync('DELETE FROM shared_messages WHERE book_id = ?', id);
+    db.runSync('DELETE FROM shared_reads WHERE book_id = ?', id);
     db.runSync('DELETE FROM shared_book_members WHERE book_id = ?', id);
     db.runSync('DELETE FROM shared_books WHERE id = ?', id);
     // Leave no orphan flags row behind to sync back and haunt the list.
@@ -1991,6 +2135,9 @@ export function getSharedBookSummaries(userId: string): SharedBookSummary[] {
     userId, userId, userId
   );
 
+  // One query for every book's unread count, rather than one per row below.
+  const unread = getUnreadCounts(userId);
+
   return books.map((book) => {
     const other = db.getFirstSync<{ user_id: string }>(
       'SELECT user_id FROM shared_book_members WHERE book_id = ? AND user_id <> ? LIMIT 1',
@@ -2010,6 +2157,7 @@ export function getSharedBookSummaries(userId: string): SharedBookSummary[] {
       pinned: flags.pinned ? 1 : 0,
       archived: flags.archived ? 1 : 0,
       pending: !other,
+      unread: unread[book.id] ?? 0,
     };
   });
 }
@@ -2027,6 +2175,203 @@ export function combineLedgerTotals(own: LedgerTotals, books: SharedBookSummary[
     else payable += -book.balance;
   }
   return { receivable, payable };
+}
+
+// --- Shared-book chat -------------------------------------------------------
+// The conversation that goes with a book. Messages ride the shared sync lane,
+// so a message typed offline uploads itself exactly like an entry does, and
+// Realtime delivers the other member's as they arrive.
+
+export type SharedMessageInput = {
+  bookId: string;
+  body: string;
+  /** The entry this message is about, when it is about one. */
+  entryId?: string | null;
+};
+
+/**
+ * Send a message. `sender_id` is always you — the server enforces that, and
+ * mirroring it here keeps the bubble on the right side of the screen before
+ * the row has been anywhere near the network.
+ */
+export function addSharedMessage(input: SharedMessageInput): string {
+  const id = newId();
+  const updatedAt = nowIso();
+  db.runSync(
+    `INSERT INTO shared_messages
+       (id, book_id, sender_id, body, entry_id, deleted_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
+    id, input.bookId, currentUserId ?? '', input.body, input.entryId ?? null, updatedAt, updatedAt
+  );
+  enqueue('shared_messages', id, 'upsert', updatedAt);
+  return id;
+}
+
+/**
+ * Delete your own message for everyone.
+ *
+ * An UPDATE, not a delete. The body and any quoted entry are wiped — on this
+ * device, and on the server and theirs once it syncs, so the content really is
+ * gone — but the row stays, carrying `deleted_at`. That is what lets both
+ * threads show a line where the message was instead of quietly closing the gap
+ * as though nothing had ever been said.
+ *
+ * It also means this rides the ordinary upsert path: a retraction made offline
+ * queues and uploads itself exactly like the message did.
+ */
+export function deleteSharedMessage(id: string): void {
+  const updatedAt = nowIso();
+  db.runSync(
+    `UPDATE shared_messages SET body = '', entry_id = NULL, deleted_at = ?, updated_at = ?
+     WHERE id = ?`,
+    updatedAt, updatedAt, id
+  );
+  enqueue('shared_messages', id, 'upsert', updatedAt);
+}
+
+export function getSharedMessage(id: string): SharedMessage | null {
+  return db.getFirstSync<SharedMessage>('SELECT * FROM shared_messages WHERE id = ?', id);
+}
+
+/** A book's thread, oldest first — the order a conversation is read in. */
+export function getSharedMessages(bookId: string): SharedMessage[] {
+  return db.getAllSync<SharedMessage>(
+    'SELECT * FROM shared_messages WHERE book_id = ? ORDER BY created_at ASC, id ASC',
+    bookId
+  );
+}
+
+/** The newest message in a book, for a one-line preview. */
+export function getLastSharedMessage(bookId: string): SharedMessage | null {
+  return db.getFirstSync<SharedMessage>(
+    'SELECT * FROM shared_messages WHERE book_id = ? ORDER BY created_at DESC, id DESC LIMIT 1',
+    bookId
+  );
+}
+
+/**
+ * How far a member's device has received, and how far they have read.
+ *
+ * Both come back together because the ticks need both: one tick means the
+ * server has it, two mean their phone has it, blue means they have read it.
+ * Either is '' when it has never happened.
+ */
+export function getBookReadState(
+  bookId: string,
+  userId: string
+): { delivered: string; read: string } {
+  const row = db.getFirstSync<{ delivered_at: string; last_read_at: string }>(
+    'SELECT delivered_at, last_read_at FROM shared_reads WHERE book_id = ? AND user_id = ?',
+    bookId, userId
+  );
+  return { delivered: row?.delivered_at ?? '', read: row?.last_read_at ?? '' };
+}
+
+/**
+ * Move one member's marker forward.
+ *
+ * ON CONFLICT rather than INSERT OR REPLACE because the two markers live in
+ * the same row and are written by different events — a replace would clear
+ * whichever one this call isn't carrying.
+ *
+ * Reading implies receiving, so a read marker drags `delivered_at` up with it;
+ * without that, a message read the instant it landed would show one tick
+ * forever, since nothing would ever have recorded its delivery.
+ */
+function setReadMarker(
+  bookId: string,
+  userId: string,
+  upTo: string,
+  kind: 'delivered' | 'read'
+): void {
+  const updatedAt = nowIso();
+  const id = `${bookId}:${userId}`;
+  const read = kind === 'read' ? upTo : '';
+  db.runSync(
+    `INSERT INTO shared_reads (id, book_id, user_id, delivered_at, last_read_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       delivered_at = MAX(delivered_at, excluded.delivered_at),
+       last_read_at = MAX(last_read_at, excluded.last_read_at),
+       updated_at = excluded.updated_at`,
+    id, bookId, userId, upTo, read, updatedAt
+  );
+  enqueue('shared_reads', id, 'upsert', updatedAt);
+}
+
+/**
+ * Mark a book's thread read up to its newest message.
+ *
+ * The marker is set to that message's `created_at` rather than to now, so it
+ * means "I have seen up to here" and not "I looked at this screen at some
+ * point" — which is what makes the other side's "Seen" tick truthful.
+ *
+ * Only ever moves forward. A device that was offline while the thread moved on
+ * must not be able to drag the marker back and resurrect read messages.
+ * Returns true when it actually moved, so callers can skip a pointless sync.
+ */
+export function markBookRead(bookId: string, userId: string): boolean {
+  const newest = db.getFirstSync<{ created_at: string }>(
+    'SELECT created_at FROM shared_messages WHERE book_id = ? ORDER BY created_at DESC LIMIT 1',
+    bookId
+  );
+  const upTo = newest?.created_at;
+  if (!upTo) return false; // nothing has been said yet
+
+  if (getBookReadState(bookId, userId).read >= upTo) return false;
+  setReadMarker(bookId, userId, upTo, 'read');
+  return true;
+}
+
+/**
+ * Record that this device now holds every message it can see — the second
+ * tick on the other person's screen.
+ *
+ * Run after a pull or a realtime insert, across every book at once: a sync
+ * brings messages for all of them in one go, and asking per book would mean a
+ * query per book on every cycle.
+ */
+export function markBooksDelivered(userId: string): void {
+  const rows = db.getAllSync<{ book_id: string; newest: string }>(
+    `SELECT m.book_id AS book_id, MAX(m.created_at) AS newest
+     FROM shared_messages m
+     LEFT JOIN shared_reads r ON r.book_id = m.book_id AND r.user_id = ?
+     WHERE m.sender_id <> ? AND m.created_at > COALESCE(r.delivered_at, '')
+     GROUP BY m.book_id`,
+    userId, userId
+  );
+  for (const row of rows) setReadMarker(row.book_id, userId, row.newest, 'delivered');
+}
+
+/** Messages in one book from anyone but you that you haven't read. */
+export function getUnreadCount(bookId: string, userId: string): number {
+  const row = db.getFirstSync<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM shared_messages
+     WHERE book_id = ? AND sender_id <> ? AND deleted_at IS NULL AND created_at > ?`,
+    bookId, userId, getBookReadState(bookId, userId).read
+  );
+  return row?.n ?? 0;
+}
+
+/**
+ * Unread counts for every book at once, keyed by book id.
+ *
+ * One query rather than one per book: the people list draws every book on the
+ * same pass, and a query per row is what turns a list into a stutter.
+ */
+export function getUnreadCounts(userId: string): Record<string, number> {
+  const rows = db.getAllSync<{ book_id: string; n: number }>(
+    `SELECT m.book_id AS book_id, COUNT(*) AS n
+     FROM shared_messages m
+     LEFT JOIN shared_reads r ON r.book_id = m.book_id AND r.user_id = ?
+     WHERE m.sender_id <> ? AND m.deleted_at IS NULL
+       AND m.created_at > COALESCE(r.last_read_at, '')
+     GROUP BY m.book_id`,
+    userId, userId
+  );
+  const counts: Record<string, number> = {};
+  for (const row of rows) counts[row.book_id] = row.n;
+  return counts;
 }
 
 /** The shared pull cursor. Separate from the personal one — different lane. */

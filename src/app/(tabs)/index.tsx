@@ -24,6 +24,9 @@ import {
   getTotals,
 } from '@/db';
 import { useCategoryIcon, useQuery } from '@/db/hooks';
+import { BalanceEye } from '@/components/balance-eye';
+import { useBalanceCovered } from '@/hooks/use-balance-privacy';
+import { TOTAL_PAYABLE_SCOPE, TOTAL_RECEIVABLE_SCOPE } from '@/lib/balance-privacy';
 import { useTheme } from '@/hooks/use-theme';
 import { useWeekStart } from '@/hooks/use-week-start';
 import {
@@ -36,7 +39,7 @@ import {
   weekEnd,
   weekStart,
 } from '@/lib/date';
-import { formatMoney } from '@/lib/money';
+import { formatMoney, HIDDEN_AMOUNT } from '@/lib/money';
 import { setWeekStart } from '@/lib/week-start';
 import { useSync } from '@/sync/provider';
 
@@ -45,6 +48,10 @@ const TOP_CATEGORIES = 3;
 
 export default function DashboardScreen() {
   const theme = useTheme();
+  // The same two scopes the Loans tiles use, so covering one covers it in both
+  // places — it is the same figure, and only one of them hiding would be a leak.
+  const getCovered = useBalanceCovered(TOTAL_RECEIVABLE_SCOPE);
+  const payCovered = useBalanceCovered(TOTAL_PAYABLE_SCOPE);
   const router = useRouter();
   const { name, avatarUrl } = useSync();
   const iconFor = useCategoryIcon();
@@ -248,20 +255,26 @@ export default function DashboardScreen() {
             />
             <View style={styles.peopleLegs}>
               <View style={styles.leg}>
-                <ThemedText type="small" themeColor="textSecondary">
-                  You’ll get
-                </ThemedText>
+                <View style={styles.legHead}>
+                  <ThemedText type="small" themeColor="textSecondary" style={styles.legHeadText}>
+                    You’ll get
+                  </ThemedText>
+                  <BalanceEye scope={TOTAL_RECEIVABLE_SCOPE} size={22} what="what you’ll get" />
+                </View>
                 <ThemedText style={[styles.legValue, { color: MoneyColors.in }]} numberOfLines={1} adjustsFontSizeToFit>
-                  {formatMoney(ledger.receivable)}
+                  {getCovered ? HIDDEN_AMOUNT : formatMoney(ledger.receivable)}
                 </ThemedText>
               </View>
               <View style={[styles.legDivider, { backgroundColor: theme.backgroundSelected }]} />
               <View style={styles.leg}>
-                <ThemedText type="small" themeColor="textSecondary">
-                  You’ll pay
-                </ThemedText>
+                <View style={styles.legHead}>
+                  <ThemedText type="small" themeColor="textSecondary" style={styles.legHeadText}>
+                    You’ll pay
+                  </ThemedText>
+                  <BalanceEye scope={TOTAL_PAYABLE_SCOPE} size={22} what="what you’ll pay" />
+                </View>
                 <ThemedText style={[styles.legValue, { color: MoneyColors.out }]} numberOfLines={1} adjustsFontSizeToFit>
-                  {formatMoney(ledger.payable)}
+                  {payCovered ? HIDDEN_AMOUNT : formatMoney(ledger.payable)}
                 </ThemedText>
               </View>
             </View>
@@ -597,6 +610,14 @@ const styles = StyleSheet.create({
   legDivider: {
     width: 1,
     marginHorizontal: Spacing.three,
+  },
+  legHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  legHeadText: {
+    flex: 1,
   },
   legValue: {
     fontSize: 20,

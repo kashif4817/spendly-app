@@ -44,6 +44,19 @@ export function formatFullDate(key: string): string {
   return `${WEEKDAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 
+/**
+ * e.g. "14 Jul 2026" — the full date without the weekday.
+ *
+ * For somewhere a date is repeated down a list and the weekday is just width:
+ * a shared statement, where ten rows of "Mon, " add nothing. Never relative,
+ * unlike `formatRelativeDay` below — "Today" is wrong the moment the message
+ * it is in is read tomorrow.
+ */
+export function formatShortDate(key: string): string {
+  const d = keyToDate(key);
+  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
 /** Friendly label: "Today", "Yesterday", or a full date. */
 export function formatRelativeDay(key: string): string {
   if (key === todayKey()) return 'Today';

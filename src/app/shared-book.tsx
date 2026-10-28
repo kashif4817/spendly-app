@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ActionSheet } from '@/components/action-sheet';
+import { UnreadBadge } from '@/components/chat';
 import { GlassButton } from '@/components/glass';
 import { PromptModal } from '@/components/prompt-modal';
 import {
@@ -38,6 +39,7 @@ import {
   getPendingRowIds,
   getSharedEntries,
   getSharedMemberName,
+  getUnreadCount,
   setBookArchived,
   setBookPinned,
 } from '@/db';
@@ -45,7 +47,9 @@ import { useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
 import { formatTime, groupByDay } from '@/lib/date';
 import { confirm, notify } from '@/lib/confirm';
+import { bookScope } from '@/lib/balance-privacy';
 import { formatMoney } from '@/lib/money';
+import { shareBookBalance } from '@/lib/share-balance';
 import {
   leaveSharedBook,
   renameSharedBook,
@@ -88,6 +92,8 @@ export default function SharedBookScreen() {
   const { status, refreshShared, lastSyncedAt } = useSync();
   const params = useLocalSearchParams<{ id?: string }>();
   const bookId = params.id ?? '';
+  // Keyed by id, not name: a book can be renamed and stay the same book.
+  const scope = bookScope(bookId);
 
   const me = getCurrentUserId() ?? '';
   const book = useQuery(() => getSharedBook(bookId), [bookId]);
@@ -103,6 +109,12 @@ export default function SharedBookScreen() {
   const hasPendingChanges = entries.some((entry) => pending.has(entry.id));
 
   const flags = useQuery(() => getBookFlags(bookId), [bookId]);
+  /**
+   * Messages from the other member you haven't read. Drives the count on the
+   * chat button, and clears itself when the thread is opened — the marker it
+   * reads lives in the same database, so this re-runs on its own.
+   */
+  const unread = useQuery(() => getUnreadCount(bookId, me), [bookId, me]);
 
   // One section per day, netted from your side: what you paid in, what they
   // paid out — the same sum the balance uses.
@@ -346,6 +358,23 @@ export default function SharedBookScreen() {
           title: book.name || 'Shared book',
           headerRight: () => (
             <View style={styles.headerActions}>
+              {/* Beside Refresh, and before it: the thread is the one thing
+                  here you might open without having come to check a balance. */}
+              <Pressable
+                onPress={() =>
+                  router.push(`/shared-chat?book=${encodeURIComponent(bookId)}` as Href)
+                }
+                hitSlop={10}
+                style={styles.headerChat}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  unread > 0
+                    ? `Chat, ${unread} unread ${unread === 1 ? 'message' : 'messages'}`
+                    : 'Chat'
+                }>
+                <MaterialIcons name="chat-bubble-outline" size={22} color={theme.text} />
+                <UnreadBadge count={unread} style={styles.headerBadge} />
+              </Pressable>
               <Pressable
                 onPress={() => refresh()}
                 disabled={checking}
@@ -386,6 +415,7 @@ export default function SharedBookScreen() {
           ListHeaderComponent={
             <View style={styles.head}>
               <StatementBalance
+                scope={scope}
                 caption={
                   settled ? 'All settled' : owesYou ? `${theirLabel} owes you` : `You owe ${theirLabel}`
                 }
@@ -513,6 +543,14 @@ export default function SharedBookScreen() {
         title={book.name || 'Shared book'}
         actions={[
           {
+            // In the sheet rather than the header: chat, refresh and options
+            // already fill that row, and a fourth icon would start eating the
+            // book's name on a narrow phone.
+            label: 'Share balance',
+            icon: 'share',
+            onPress: () => void shareBookBalance(bookId),
+          },
+          {
             label: flags.pinned ? 'Unpin from top' : 'Pin to top',
             icon: 'push-pin',
             onPress: () => setBookPinned(bookId, !flags.pinned),
@@ -639,6 +677,28 @@ const styles = StyleSheet.create({
     height: 24,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  /**
+   * The chat button's box, wider and taller than the other two because it is
+   * the only one carrying a badge.
+   *
+   * The badge used to hang outside a 24pt box on negative offsets, and Android
+   * clips a child that overflows its parent inside a header — which took the
+   * top off the count. Everything now sits within these bounds, so there is
+   * nothing left to clip.
+   */
+  headerChat: {
+    width: 34,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Inside the box above, overlapping the icon's top-right corner — which is
+  // where a count belongs, and now costs nothing to draw.
+  headerBadge: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
   },
   inviteCard: {
     flexDirection: 'row',

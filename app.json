@@ -59,6 +59,13 @@
           "faceIDPermission": "Spendly uses Face ID to unlock the app."
         }
       ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/spendly-mark-light.png",
+          "color": "#6A45F5"
+        }
+      ],
       "@react-native-google-signin/google-signin"
     ],
     "experiments": {

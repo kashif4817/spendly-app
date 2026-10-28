@@ -1,7 +1,11 @@
 /**
  * Owns the "is the app currently locked?" state. The app locks on a cold start
- * (if a PIN is set) and again after it's been in the background longer than a
+ * (if App Lock is on) and again after it's been in the background longer than a
  * short grace period, so quick app-switches don't nag but leaving the app does.
+ *
+ * It also holds the lock CONFIG for the rest of the app to read synchronously —
+ * SecureStore is async, and a balance that had to await a disk read before it
+ * knew whether to cover itself would flash the figure first.
  */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
@@ -10,21 +14,26 @@ import { AppState } from 'react-native';
 import { getCurrentUserId } from '@/db';
 import { googleSignInIdToken } from '@/lib/google';
 import { supabase } from '@/lib/supabase';
-import { disableLock, getLockConfig, promptBiometric, verifyPin, type LockConfig } from '@/lock/app-lock';
+import { syncBalancePinRequired } from '@/lib/balance-privacy';
+import { forgetPin, getLockConfig, promptBiometric, verifyPin, type LockConfig } from '@/lock/app-lock';
 
 /** How long the app can be backgrounded before it re-locks. */
 const GRACE_MS = 15_000;
 
 type LockContextValue = {
   ready: boolean;
+  /** A PIN exists, so either switch below can be turned on. */
+  hasPin: boolean;
   enabled: boolean;
   biometric: boolean;
+  /** Showing a hidden balance asks for the PIN. */
+  balancePin: boolean;
   isLocked: boolean;
   /** Reload config after the user changes lock settings. */
   refresh: () => Promise<LockConfig>;
   unlockWithPin: (pin: string) => Promise<boolean>;
   tryBiometric: () => Promise<boolean>;
-  /** Forgot-PIN recovery: re-verify with Google, then turn app lock off. */
+  /** Forgot-PIN recovery: re-verify with Google, then forget the PIN. */
   forgotUnlock: () => Promise<boolean>;
 };
 
@@ -38,7 +47,12 @@ export function useLock(): LockContextValue {
 
 export function LockProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
-  const [config, setConfig] = useState<LockConfig>({ enabled: false, biometric: false });
+  const [config, setConfig] = useState<LockConfig>({
+    hasPin: false,
+    enabled: false,
+    biometric: false,
+    balancePin: false,
+  });
   const [isLocked, setIsLocked] = useState(false);
 
   const enabledRef = useRef(false);
@@ -48,6 +62,9 @@ export function LockProvider({ children }: { children: React.ReactNode }) {
   const refresh = useCallback(async () => {
     const c = await getLockConfig();
     setConfig(c);
+    // The balance store runs its own re-hide timer and has to know whether the
+    // PIN still guards anything, so every config change is pushed to it.
+    syncBalancePinRequired(c.balancePin && c.hasPin);
     return c;
   }, []);
 
@@ -55,7 +72,8 @@ export function LockProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       const c = await getLockConfig();
       setConfig(c);
-      setIsLocked(c.enabled); // lock on cold start when a PIN is set
+      syncBalancePinRequired(c.balancePin && c.hasPin);
+      setIsLocked(c.enabled && c.hasPin); // lock on cold start when App Lock is on
       setReady(true);
     })();
 
@@ -94,7 +112,7 @@ export function LockProvider({ children }: { children: React.ReactNode }) {
       });
       // Only the account that's actually signed in may turn the lock off.
       if (error || !data.user || data.user.id !== getCurrentUserId()) return false;
-      await disableLock();
+      await forgetPin();
       await refresh();
       setIsLocked(false);
       return true;
@@ -105,8 +123,10 @@ export function LockProvider({ children }: { children: React.ReactNode }) {
 
   const value: LockContextValue = {
     ready,
+    hasPin: config.hasPin,
     enabled: config.enabled,
     biometric: config.biometric,
+    balancePin: config.balancePin,
     isLocked,
     refresh,
     unlockWithPin,
