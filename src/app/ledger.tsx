@@ -1,6 +1,6 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
@@ -15,6 +15,7 @@ import {
 } from '@/components/form';
 import { Segmented } from '@/components/segmented';
 import { confirm, notify } from '@/lib/confirm';
+import { KeyboardAvoider } from '@/components/keyboard-avoider';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
@@ -32,6 +33,7 @@ import { useQuery } from '@/db/hooks';
 import { useTheme } from '@/hooks/use-theme';
 import { todayKey } from '@/lib/date';
 import { parseAmount } from '@/lib/money';
+import { matchesQuery, normaliseName } from '@/lib/people-match';
 import { offerUndo } from '@/lib/undo';
 
 export default function LedgerEntryScreen() {
@@ -52,12 +54,23 @@ export default function LedgerEntryScreen() {
 
   const accent = direction === 'gave' ? MoneyColors.in : MoneyColors.out;
 
-  // Suggest previously-added people (filtered by what's typed).
+  /**
+   * Previously-added people, narrowed by what has been typed.
+   *
+   * Matched on the start of a WORD rather than anywhere in the string: with
+   * `includes`, typing "Sir" offered up two people called Mudasir, because
+   * "Mudasir" happens to end in those letters. See lib/people-match.ts.
+   *
+   * A name that exactly matches what is typed is dropped — suggesting the
+   * word already in the box is not a suggestion.
+   */
   const allPeople = useQuery(() => getPeople());
   const suggestions = useMemo(() => {
-    const q = person.trim().toLowerCase();
+    const typed = normaliseName(person);
     const names = allPeople.map((p) => p.person);
-    const list = q ? names.filter((n) => n.toLowerCase().includes(q) && n.toLowerCase() !== q) : names;
+    const list = typed
+      ? names.filter((n) => matchesQuery(n, typed) && normaliseName(n) !== typed)
+      : names;
     return list.slice(0, 8);
   }, [allPeople, person]);
 
@@ -114,12 +127,13 @@ export default function LedgerEntryScreen() {
   return (
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ title }} />
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoider style={styles.flex}>
         <ScrollView
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
+          // A decimal pad has no Done key on Android, so a drag is the
+          // only gesture left that can put the keyboard away.
+          keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}>
           <View style={styles.direction}>
             <Segmented
@@ -189,7 +203,7 @@ export default function LedgerEntryScreen() {
 
           <SafeAreaView edges={['bottom']} />
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAvoider>
     </ThemedView>
   );
 }

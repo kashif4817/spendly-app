@@ -16,23 +16,68 @@ Supabase Dashboard → SQL Editor → New query → paste → Run:
 supabase/shared-chat.sql
 ```
 
-Safe to re-run, and **re-running it is how you upgrade**: columns added after
-the first release (`shared_messages.deleted_at`, `shared_reads.delivered_at` —
-the retracted-message line and the second tick) are applied with
-`add column if not exists`, so an existing project picks them up without
-losing a message.
+Safe to re-run, and **re-running it is how you upgrade.** Everything added
+after the first release is applied with `add column if not exists` /
+`create table if not exists`, so an existing project picks it up without
+losing a message:
+
+| Added | What it is for |
+| --- | --- |
+| `shared_messages.deleted_at` | The line left behind by a retracted message. |
+| `shared_reads.delivered_at` | The second tick. |
+| `shared_messages.reply_to` | Swipe-to-reply. |
+| `shared_messages.expires_at` | Timed disappearing messages — stamped per message as it is sent. |
+| `shared_books.expire_after` | How long this book's messages live, in seconds; 0 is off. |
+| `shared_reactions` | Tap-backs. One row per (message, person). |
+| `shared_messages.edited_at` | When the sender last corrected the words. |
+| `shared_messages.vanish_at` | Sent into a vanishing session — no clock, clears when either of you leaves the thread. |
+| `shared_books.pinned_message` | The one message held at the top of the thread. |
+| `shared_books.vanish_state` | `''` off, `ask:<uuid>` invited, `on` running. |
+
+Until it has been run, an app update that uses them keeps its messages
+**queued** rather than losing them: the push sees a column the server has
+never heard of, leaves the row in the outbox, and uploads it the moment the
+SQL lands. Reactions behave the same way — a missing table is skipped by the
+pull rather than failing it, so nothing else stops syncing meanwhile.
 
 Run it **after** `shared-books.sql`, which it depends on — it reuses that
 file's `is_book_member()` for every policy, and `profiles.set_updated_at()`
 for its triggers.
 
-It creates three tables:
+It creates four tables:
 
 | Table | What it holds |
 | --- | --- |
 | `shared_messages` | The thread. One row per message, scoped to a book. |
+| `shared_reactions` | Tap-backs. One row per (message, person), so re-reacting replaces rather than stacks. |
 | `shared_reads` | How far each member has received and read — two timestamps per (book, member). |
 | `push_tokens` | Where to reach a member whose app isn't running. |
+
+Reactions are a table of their own rather than a column on the message on
+purpose: the whole point is reacting to what the **other** person said, and
+the message policy deliberately lets nobody but the sender touch their own
+row. You own your reaction, they own their message, and neither policy has to
+be loosened.
+
+Typing indicators need **no SQL at all**. They go over Realtime broadcast on a
+channel named after the book's id — nothing is stored, nothing is replayed,
+and the only thing on the wire is "someone is typing".
+
+Nor do the device-local features: muting a chat, starring messages and unsent
+drafts all live in AsyncStorage on the one phone. None of them is a fact about
+the conversation, so none of them is the other person's business.
+
+### Two kinds of disappearing
+
+| | Set by | Clock | Ends when |
+| --- | --- | --- | --- |
+| **Disappearing messages** | Either member, from the menu | 24h / 7d / 30d | The stamp on each message is reached |
+| **Vanishing chat** | One invites, the other accepts | None | Either of you leaves the thread |
+
+They are deliberately separate. The first is a retention policy; the second is
+a mode you are both in for as long as you are both looking at it. A vanishing
+message carries `vanish_at` and is never previewed in a push notification,
+never forwarded, never pinned and never exported.
 
 …plus the RLS policies (members read the thread, only the sender can change
 their own message, push tokens are own-row only), the realtime publication

@@ -153,12 +153,33 @@ export function SettleButton({
   );
 }
 
-/** The "STATEMENT" label above the list. */
-export function StatementHeading({ children = 'Statement' }: { children?: string }) {
+/**
+ * The "STATEMENT" label above the list, and opposite it the one thing about
+ * the list you would never otherwise find: that a row can be held and moved.
+ *
+ * On the heading rather than on a row, because a hint attached to every row
+ * would be noise on all of them — and shown only when there is actually a day
+ * with two entries in it, since a statement you cannot reorder shouldn't be
+ * telling you how to.
+ */
+export function StatementHeading({
+  children = 'Statement',
+  hint,
+}: {
+  children?: string;
+  hint?: string;
+}) {
   return (
-    <ThemedText type="smallBold" themeColor="textSecondary" style={styles.heading}>
-      {children.toUpperCase()}
-    </ThemedText>
+    <View style={styles.headingRow}>
+      <ThemedText type="smallBold" themeColor="textSecondary" style={styles.heading}>
+        {children.toUpperCase()}
+      </ThemedText>
+      {!!hint && (
+        <ThemedText type="small" themeColor="textSecondary" style={styles.headingHint}>
+          {hint}
+        </ThemedText>
+      )}
+    </View>
   );
 }
 
@@ -319,10 +340,20 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     minHeight: 40,
   },
-  heading: {
+  headingRow: {
     marginTop: Spacing.two,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  heading: {
     fontSize: 11,
     letterSpacing: 0.8,
+  },
+  headingHint: {
+    fontSize: 11,
+    flexShrink: 1,
   },
   day: {
     flexDirection: 'row',

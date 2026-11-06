@@ -1,7 +1,8 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { Children, Fragment } from 'react';
+import { Children, Fragment, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   Pressable,
   StyleSheet,
   TextInput,
@@ -9,12 +10,14 @@ import {
   type TextInputProps,
 } from 'react-native';
 
+import { CalculatorSheet } from '@/components/calculator-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { CURRENCY } from '@/constants/app';
 import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { addDays, formatRelativeDay, todayKey } from '@/lib/date';
+import { formatCompact, formatMoney, looksLikeExpression, parseAmount } from '@/lib/money';
 
 /**
  * Building blocks for the add/edit screens (expense, loan, shared book), so
@@ -24,6 +27,15 @@ import { addDays, formatRelativeDay, todayKey } from '@/lib/date';
 
 type IconName = React.ComponentProps<typeof MaterialIcons>['name'];
 
+/**
+ * What the quick-add chips step by.
+ *
+ * Chosen for the amounts this app actually sees — a chai, a lunch, a fare —
+ * rather than round numbers for their own sake. They ADD rather than replace,
+ * so three taps on +100 is 300 and nobody has to think about it.
+ */
+const AMOUNT_STEPS = [50, 100, 500, 1000];
+
 /** The amount, large, with the currency coloured by direction. */
 export function AmountField({
   value,
@@ -31,14 +43,40 @@ export function AmountField({
   color,
   autoFocus,
   editable = true,
+  steps = true,
 }: {
   value: string;
   onChangeText: (text: string) => void;
   color: string;
   autoFocus?: boolean;
   editable?: boolean;
+  /** Pass false where a figure is being corrected rather than entered. */
+  steps?: boolean;
 }) {
   const theme = useTheme();
+  const [padOpen, setPadOpen] = useState(false);
+
+  /**
+   * The sum, worked out, while it is still being written.
+   *
+   * `parseAmount` has always evaluated "120+80" on save; what it never did
+   * was say so beforehand. Shown only for something that LOOKS like a sum, so
+   * a plain amount is not followed around by a restatement of itself.
+   */
+  const working = looksLikeExpression(value) ? parseAmount(value) : null;
+
+  /**
+   * Add to the figure already there.
+   *
+   * Through `parseAmount`, so a half-typed sum like "120+80" settles to 200
+   * before the step goes on — the alternative is a field holding "120+80+100",
+   * which is correct and unreadable.
+   */
+  const bump = (step: number) => {
+    const next = Math.round((parseAmount(value) + step) * 100) / 100;
+    onChangeText(String(next));
+  };
+
   return (
     <ThemedView type="backgroundElement" style={styles.amountCard}>
       <ThemedText type="small" themeColor="textSecondary">
@@ -57,7 +95,57 @@ export function AmountField({
           style={[styles.amountInput, { color: theme.text }]}
           accessibilityLabel="Amount"
         />
+        {/* A decimal pad has no + − × ÷ on it, which is the only reason the
+            sums this field can already evaluate were impossible to type. */}
+        {editable && (
+          <Pressable
+            onPress={() => {
+              // The system pad and this one both want the bottom of the
+              // screen; the one with operators on it wins.
+              Keyboard.dismiss();
+              setPadOpen(true);
+            }}
+            hitSlop={8}
+            style={({ pressed }) => [styles.calcBtn, theme.glassWeak, pressed && styles.pressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Open the calculator">
+            <MaterialIcons name="calculate" size={20} color={color} />
+          </Pressable>
+        )}
       </View>
+
+      {working !== null && (
+        <ThemedText type="small" themeColor="textSecondary" style={styles.working}>
+          = {formatMoney(working)}
+        </ThemedText>
+      )}
+
+      {/* A numeric keypad has no Done key on Android, so these also give the
+          thumb somewhere useful to be while the pad is up. */}
+      {steps && editable && (
+        <View style={styles.stepRow}>
+          {AMOUNT_STEPS.map((step) => (
+            <Pressable
+              key={step}
+              onPress={() => bump(step)}
+              style={({ pressed }) => [styles.stepChip, theme.glassWeak, pressed && styles.pressed]}
+              accessibilityRole="button"
+              accessibilityLabel={`Add ${step}`}>
+              <ThemedText type="small" themeColor="textSecondary">
+                +{formatCompact(step)}
+              </ThemedText>
+            </Pressable>
+          ))}
+        </View>
+      )}
+
+      <CalculatorSheet
+        visible={padOpen}
+        initial={value}
+        color={color}
+        onChange={onChangeText}
+        onClose={() => setPadOpen(false)}
+      />
     </ThemedView>
   );
 }
@@ -265,6 +353,27 @@ const styles = StyleSheet.create({
     fontSize: 40,
     fontWeight: '700',
     paddingVertical: Spacing.one,
+  },
+  calcBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  working: {
+    paddingTop: 2,
+  },
+  stepRow: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+    paddingTop: Spacing.two,
+  },
+  stepChip: {
+    flex: 1,
+    alignItems: 'center',
+    borderRadius: Radius.full,
+    paddingVertical: 6,
   },
   card: {
     borderRadius: Radius.card,

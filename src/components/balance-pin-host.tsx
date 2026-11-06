@@ -20,6 +20,7 @@ import { useBalancePinRequest } from '@/hooks/use-balance-privacy';
 import { useTheme } from '@/hooks/use-theme';
 import { dismissBalancePin } from '@/lib/balance-privacy';
 import { promptBiometric, verifyPin } from '@/lock/app-lock';
+import { useBiometrics } from '@/hooks/use-biometrics';
 import { useLock } from '@/lock/provider';
 
 export function BalancePinHost() {
@@ -32,6 +33,7 @@ export function BalancePinHost() {
 function BalancePinDialog({ onUnlock }: { onUnlock: () => void }) {
   const theme = useTheme();
   const { biometric } = useLock();
+  const bio = useBiometrics();
 
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
@@ -104,10 +106,14 @@ function BalancePinDialog({ onUnlock }: { onUnlock: () => void }) {
                 onComplete={onComplete}
                 error={error}
                 onBiometric={
-                  biometric
+                  // Only when the user asked for it AND the phone still has
+                  // it enrolled — somebody can remove a fingerprint in system
+                  // settings long after turning this on here.
+                  biometric && bio?.available
                     ? () => promptBiometric('Show your balance').then((ok) => ok && succeed())
                     : undefined
                 }
+                biometricKind={bio?.primary}
               />
             </Animated.View>
 

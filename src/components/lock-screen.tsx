@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { BiometricTarget, type BiometricState } from '@/components/biometric-target';
 import { GoogleGlyph } from '@/components/google-glyph';
+import { useBiometrics } from '@/hooks/use-biometrics';
 import { useTheme } from '@/hooks/use-theme';
 import { PinPad } from '@/components/pin-pad';
 import { ThemedText } from '@/components/themed-text';
@@ -25,9 +27,34 @@ export function LockScreen() {
   const [busy, setBusy] = useState(false);
   const [forgotError, setForgotError] = useState<string | null>(null);
 
+  const bio = useBiometrics();
+  /** Offered only when the user turned it on AND the phone still has it. */
+  const useBio = biometric && !!bio?.available;
+  const [bioState, setBioState] = useState<BiometricState>('idle');
+
+  /**
+   * Ask the OS, and remember how it went.
+   *
+   * The result matters on screen, not just as an unlock: a face scan that
+   * failed leaves the sheet gone and the PIN pad up, which without this looks
+   * like the app never tried. The target turns red and says to tap again.
+   */
+  const askBiometric = useCallback(async () => {
+    setBioState('scanning');
+    const ok = await tryBiometric();
+    // On success this screen is already unmounting; setting state would be a
+    // no-op at best, so only the failure is recorded.
+    if (!ok) setBioState('failed');
+  }, [tryBiometric]);
+
+  // Once, on arrival. Not on every render, and not again after it failed —
+  // a prompt that reopens itself is a prompt you cannot get out of.
+  const asked = useRef(false);
   useEffect(() => {
-    if (mode === 'pin' && biometric) tryBiometric();
-  }, [mode, biometric, tryBiometric]);
+    if (mode !== 'pin' || !useBio || asked.current) return;
+    asked.current = true;
+    void askBiometric();
+  }, [mode, useBio, askBiometric]);
 
   const onComplete = async (value: string) => {
     const ok = await unlockWithPin(value);
@@ -60,15 +87,35 @@ export function LockScreen() {
         {mode === 'pin' ? (
           <>
             <View style={styles.top}>
-              <View style={[styles.badge, { backgroundColor: theme.accent }]}>
-                <ThemedText style={styles.badgeText}>Rs</ThemedText>
-              </View>
-              <ThemedText type="subtitle" style={styles.title}>
-                Enter PIN
-              </ThemedText>
-              <ThemedText type="small" themeColor="textSecondary">
-                Spendly is locked
-              </ThemedText>
+              {useBio && bio ? (
+                /* The sensor leads. The PIN is still right there underneath,
+                   which is the whole reason a fallback exists. */
+                <BiometricTarget
+                  kind={bio.primary}
+                  state={bioState}
+                  label={
+                    bio.primary === 'face'
+                      ? 'Look at your phone'
+                      : bio.primary === 'iris'
+                        ? 'Look at your phone'
+                        : 'Touch the sensor'
+                  }
+                  hint="or enter your PIN below"
+                  onPress={askBiometric}
+                />
+              ) : (
+                <>
+                  <View style={[styles.badge, { backgroundColor: theme.accent }]}>
+                    <ThemedText style={styles.badgeText}>Rs</ThemedText>
+                  </View>
+                  <ThemedText type="subtitle" style={styles.title}>
+                    Enter PIN
+                  </ThemedText>
+                  <ThemedText type="small" themeColor="textSecondary">
+                    Spendly is locked
+                  </ThemedText>
+                </>
+              )}
             </View>
 
             <Animated.View
@@ -85,7 +132,8 @@ export function LockScreen() {
                 }}
                 onComplete={onComplete}
                 error={error}
-                onBiometric={biometric ? tryBiometric : undefined}
+                onBiometric={useBio ? askBiometric : undefined}
+                biometricKind={bio?.primary}
               />
             </Animated.View>
 

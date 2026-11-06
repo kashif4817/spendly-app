@@ -174,11 +174,24 @@ revoke all on public.shared_books from authenticated;
 revoke all on public.shared_book_members from authenticated;
 revoke all on public.shared_entries from authenticated;
 
--- Books: read, and rename. UPDATE is granted on `name` only, which is what
--- keeps join_code and owner_id out of a client's hands. Rows are created by
--- create_book() and never deleted by a client, so no INSERT or DELETE.
+-- Books: read, rename, and set how long messages live. UPDATE is granted on
+-- those two columns only, which is what keeps join_code and owner_id out of a
+-- client's hands. Rows are created by create_book() and never deleted by a
+-- client, so no INSERT or DELETE.
+--
+-- `expire_after` is added by shared-chat.sql, so it is granted only once that
+-- file has been run — otherwise this one would fail on a project that has
+-- books but no chat yet.
 grant select on public.shared_books to authenticated;
 grant update (name) on public.shared_books to authenticated;
+do $$
+begin
+  execute 'grant update (expire_after, pinned_message, vanish_state) '
+          'on public.shared_books to authenticated';
+exception
+  when undefined_column then null;  -- shared-chat.sql hasn't been run yet
+end;
+$$;
 
 -- Membership: read, and mark your own row deleted to leave. Joining goes
 -- through join_book(), so again no INSERT.

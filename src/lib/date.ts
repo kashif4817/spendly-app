@@ -57,6 +57,20 @@ export function formatShortDate(key: string): string {
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 
+/**
+ * Whole days from a day key until today. Negative for a key in the future.
+ *
+ * Both ends are snapped to midnight before subtracting, so "yesterday" is
+ * always 1 regardless of the time of day it is asked — which is what makes
+ * "owing for 32 days" the same number all day long.
+ */
+export function daysSince(key: string): number {
+  if (!key) return 0;
+  const then = keyToDate(key).getTime();
+  const now = keyToDate(todayKey()).getTime();
+  return Math.round((now - then) / 86400000);
+}
+
 /** Friendly label: "Today", "Yesterday", or a full date. */
 export function formatRelativeDay(key: string): string {
   if (key === todayKey()) return 'Today';
@@ -69,6 +83,16 @@ export function formatTime(iso: string): string {
   const d = new Date(iso);
   if (!iso || Number.isNaN(d.getTime())) return '';
   return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
+/**
+ * The day and the time together, for the one place that needs both: message
+ * info, where "3:45 PM" alone is useless once the message is a week old.
+ */
+export function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return '';
+  return `${formatRelativeDay(dateKey(d))} at ${formatTime(iso)}`;
 }
 
 /** A run of items that share a day, and what that day came to. */

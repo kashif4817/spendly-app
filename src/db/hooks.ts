@@ -69,6 +69,23 @@ function subscribe(notify: () => void): () => void {
 const getVersion = () => version;
 
 /**
+ * Re-read every `useQuery` NOW instead of on the usual 50 ms coalesce.
+ *
+ * For the one case where the delay is visible: a gesture that has just written
+ * the new state and is about to drop its own animation. Dragging an entry into
+ * place writes the order synchronously, so waiting three frames for the list
+ * to agree means the row visibly springs back to where it was and then jumps —
+ * the coalesce is doing its job, it is just the wrong job here.
+ *
+ * Do not reach for this after an ordinary write. The 50 ms is what stops a
+ * sync of two hundred rows re-rendering every screen two hundred times.
+ */
+export function flushQueries(): void {
+  if (timer) clearTimeout(timer);
+  flush();
+}
+
+/**
  * A counter that ticks whenever the database changes or the screen regains
  * focus. Use it as a `useMemo` dependency so queries re-run at the right times.
  */

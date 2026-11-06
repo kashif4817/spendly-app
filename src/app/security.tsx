@@ -11,7 +11,8 @@ import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import {
-  biometricAvailable,
+  getBiometricInfo,
+  type BiometricInfo,
   disableBalancePin,
   disableLock,
   PIN_LENGTH,
@@ -43,10 +44,11 @@ export default function SecurityScreen() {
   const [pin, setPinValue] = useState('');
   const [firstPin, setFirstPin] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [bioAvailable, setBioAvailable] = useState(false);
+  const [bio, setBio] = useState<BiometricInfo | null>(null);
+  const bioAvailable = !!bio?.available;
 
   useEffect(() => {
-    biometricAvailable().then(setBioAvailable);
+    getBiometricInfo().then(setBio);
   }, []);
 
   /** Apply what the PIN was for. Split out because an existing PIN skips the pad. */
@@ -149,7 +151,7 @@ export default function SecurityScreen() {
       <SafeAreaView style={styles.safe}>
         <View style={styles.content}>
           <ThemedText type="small" themeColor="textSecondary">
-            One PIN{bioAvailable ? ', or your fingerprint / Face ID' : ''} — it can lock the app, guard
+            One PIN{bio?.available ? `, or ${bio.label.toLowerCase()}` : ''} — it can lock the app, guard
             the balances you&apos;ve hidden, or both. Hide a balance from a person or a shared
             book&apos;s own screen.
           </ThemedText>
@@ -196,9 +198,12 @@ export default function SecurityScreen() {
                 <GlassDivider />
                 <View style={styles.row}>
                   <View style={styles.rowText}>
-                    <ThemedText type="smallBold">Use fingerprint / Face ID</ThemedText>
+                    <ThemedText type="smallBold">Use {bio?.label ?? 'biometrics'}</ThemedText>
                     <ThemedText type="small" themeColor="textSecondary">
-                      Instead of typing the PIN
+                      {/* Said out loud, because it is the question people
+                          actually have: no, it does not want a new one. */}
+                      Instead of typing the PIN · uses the one already set up on
+                      this phone
                     </ThemedText>
                   </View>
                   <Switch

@@ -9,6 +9,7 @@ import { HBar, VerticalBars, type VerticalBar } from '@/components/bar-chart';
 import { BudgetBar } from '@/components/budget-bar';
 import { DayHeader } from '@/components/day-header';
 import { Segmented } from '@/components/segmented';
+import { KeyboardAvoider } from '@/components/keyboard-avoider';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { TransactionRow } from '@/components/transaction-row';
@@ -323,46 +324,51 @@ export default function ReportsScreen() {
   return (
     <ThemedView style={styles.container}>
       <SafeAreaView edges={['top']} style={styles.safeArea}>
-        <SectionList
-          sections={sections}
-          keyExtractor={(item) => String(item.id)}
-          contentContainerStyle={styles.content}
-          showsVerticalScrollIndicator={false}
-          stickySectionHeadersEnabled={false}
-          keyboardShouldPersistTaps="handled"
-          ListHeaderComponent={header}
-          renderSectionHeader={({ section }) => (
-            <DayHeader day={section.day} net={section.net} />
-          )}
-          renderItem={({ item }) => (
-            <TransactionRow
-              transaction={item}
-              icon={iconFor(item.category, item.type)}
-              onPress={() => router.push({ pathname: '/entry', params: { id: item.id } })}
-            />
-          )}
-          ListEmptyComponent={
-            <View style={styles.empty}>
-              {search ? (
-                <>
-                  <MaterialIcons name="search-off" size={34} color={theme.textSecondary} style={styles.emptyIcon} />
-                  <ThemedText type="smallBold">No matches</ThemedText>
-                  <ThemedText type="small" themeColor="textSecondary" style={styles.emptyHint}>
-                    Nothing found for “{search.trim()}”.
-                  </ThemedText>
-                </>
-              ) : (
-                <>
-                  <MaterialIcons name="receipt-long" size={34} color={theme.textSecondary} style={styles.emptyIcon} />
-                  <ThemedText type="smallBold">Nothing recorded yet</ThemedText>
-                  <ThemedText type="small" themeColor="textSecondary" style={styles.emptyHint}>
-                    Your entries will show up here, grouped by day.
-                  </ThemedText>
-                </>
-              )}
-            </View>
-          }
-        />
+        {/* The history search sits partway down the list, so it can be
+            anywhere on screen when it takes focus — including behind the
+            keyboard. Shrinking the list is what brings it back. */}
+        <KeyboardAvoider style={styles.flexFill}>
+          <SectionList
+            sections={sections}
+            keyExtractor={(item) => String(item.id)}
+            contentContainerStyle={styles.content}
+            showsVerticalScrollIndicator={false}
+            stickySectionHeadersEnabled={false}
+            keyboardShouldPersistTaps="handled"
+            ListHeaderComponent={header}
+            renderSectionHeader={({ section }) => (
+              <DayHeader day={section.day} net={section.net} />
+            )}
+            renderItem={({ item }) => (
+              <TransactionRow
+                transaction={item}
+                icon={iconFor(item.category, item.type)}
+                onPress={() => router.push({ pathname: '/entry', params: { id: item.id } })}
+              />
+            )}
+            ListEmptyComponent={
+              <View style={styles.empty}>
+                {search ? (
+                  <>
+                    <MaterialIcons name="search-off" size={34} color={theme.textSecondary} style={styles.emptyIcon} />
+                    <ThemedText type="smallBold">No matches</ThemedText>
+                    <ThemedText type="small" themeColor="textSecondary" style={styles.emptyHint}>
+                      Nothing found for “{search.trim()}”.
+                    </ThemedText>
+                  </>
+                ) : (
+                  <>
+                    <MaterialIcons name="receipt-long" size={34} color={theme.textSecondary} style={styles.emptyIcon} />
+                    <ThemedText type="smallBold">Nothing recorded yet</ThemedText>
+                    <ThemedText type="small" themeColor="textSecondary" style={styles.emptyHint}>
+                      Your entries will show up here, grouped by day.
+                    </ThemedText>
+                  </>
+                )}
+              </View>
+            }
+          />
+        </KeyboardAvoider>
       </SafeAreaView>
     </ThemedView>
   );
@@ -370,6 +376,9 @@ export default function ReportsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  flexFill: {
+    flex: 1,
+  },
   safeArea: {
     flex: 1,
     alignSelf: 'center',

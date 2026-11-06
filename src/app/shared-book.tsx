@@ -4,9 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
+  FlatList,
   Pressable,
   RefreshControl,
-  SectionList,
   Share,
   StyleSheet,
   View,
@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ActionSheet } from '@/components/action-sheet';
 import { UnreadBadge } from '@/components/chat';
+import { DragGroup, DragItem } from '@/components/drag-list';
 import { GlassButton } from '@/components/glass';
 import { PromptModal } from '@/components/prompt-modal';
 import {
@@ -40,6 +41,7 @@ import {
   getSharedEntries,
   getSharedMemberName,
   getUnreadCount,
+  reorderSharedDay,
   setBookArchived,
   setBookPinned,
 } from '@/db';
@@ -52,6 +54,7 @@ import { formatMoney } from '@/lib/money';
 import { shareBookBalance } from '@/lib/share-balance';
 import {
   leaveSharedBook,
+  pushEntryOrder,
   renameSharedBook,
   rotateJoinCode,
   SharedBookError,
@@ -116,11 +119,37 @@ export default function SharedBookScreen() {
    */
   const unread = useQuery(() => getUnreadCount(bookId, me), [bookId, me]);
 
-  // One section per day, netted from your side: what you paid in, what they
-  // paid out — the same sum the balance uses.
+  /**
+   * One group per day, netted from your side: what you paid in, what they paid
+   * out — the same sum the balance uses. `ids` rides along for reordering.
+   */
   const days = useMemo(
-    () => groupByDay(entries, (e) => (e.payer_id === me ? e.amount : -e.amount)),
+    () =>
+      groupByDay(entries, (e) => (e.payer_id === me ? e.amount : -e.amount)).map((group) => ({
+        ...group,
+        ids: group.data.map((e) => e.id),
+      })),
     [entries, me]
+  );
+
+  const reorderable = days.some((group) => group.ids.length > 1);
+  /** A row is in the air — the list mustn't scroll out from under it. */
+  const [dragging, setDragging] = useState(false);
+
+  /**
+   * Arrange one day by hand, both members' entries alike.
+   *
+   * Written locally first so the list is right whatever the network is doing,
+   * then handed to the server. Your own rows also go through the outbox, so
+   * reordering offline still reaches your other devices — see
+   * `reorderSharedDay` for why the two roads exist.
+   */
+  const reorderDay = useCallback(
+    (day: string, ids: string[]) => {
+      reorderSharedDay(bookId, day, ids);
+      void pushEntryOrder(bookId, ids);
+    },
+    [bookId]
   );
 
   /**
@@ -398,12 +427,15 @@ export default function SharedBookScreen() {
         }}
       />
       <SafeAreaView edges={['bottom']} style={styles.safeArea}>
-        <SectionList
-          sections={days}
-          keyExtractor={(e) => e.id}
+        {/* A list of DAYS, not of entries: a day's rows have to be siblings
+            in one view for the one being dragged to lift above the others.
+            See components/drag-list.tsx. */}
+        <FlatList
+          data={days}
+          keyExtractor={(group) => group.day}
+          scrollEnabled={!dragging}
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
-          stickySectionHeadersEnabled={false}
           refreshControl={
             <RefreshControl
               refreshing={pulled && checking}
@@ -490,42 +522,56 @@ export default function SharedBookScreen() {
                 />
               )}
 
-              <StatementHeading />
+              <StatementHeading hint={reorderable ? 'Hold a row to reorder' : undefined} />
             </View>
           }
-          renderSectionHeader={({ section }) => (
-            <StatementDay day={section.day} net={section.net} first={section === days[0]} />
+          renderItem={({ item: group, index: dayIndex }) => (
+            <View>
+              <StatementDay day={group.day} net={group.net} first={dayIndex === 0} />
+              {/* Either member may arrange a day, and the whole day moves —
+                  including rows the other person wrote. Only the AMOUNTS are
+                  the author's to change. */}
+              <DragGroup
+                ids={group.ids}
+                onDragChange={setDragging}
+                onReorder={(ids) => reorderDay(group.day, ids)}>
+                {group.data.map((item, index) => {
+                  const youPaid = item.payer_id === me;
+                  return (
+                    <DragItem key={item.id} index={index}>
+                      <StatementRow
+                        title={youPaid ? 'You paid' : `${otherName ?? 'They'} paid`}
+                        // The day is in the strip above, so an empty note
+                        // shows the time.
+                        note={item.note?.trim() || formatTime(item.created_at)}
+                        amount={item.amount}
+                        positive={youPaid}
+                        color={youPaid ? theme.money.in : theme.money.out}
+                        trailing={
+                          /* Only when it hasn't gone up yet. A tick on every
+                             single row told you nothing and left the page
+                             covered in badges. */
+                          pending.has(item.id) ? (
+                            <MaterialIcons
+                              name="cloud-upload"
+                              size={13}
+                              color={theme.accentTint}
+                              accessibilityLabel="Waiting to sync"
+                            />
+                          ) : undefined
+                        }
+                        onPress={() =>
+                          item.author_id === me
+                            ? router.push(`/shared-entry?id=${encodeURIComponent(item.id)}` as Href)
+                            : setNotice('Only the person who added an entry can change it.')
+                        }
+                      />
+                    </DragItem>
+                  );
+                })}
+              </DragGroup>
+            </View>
           )}
-          renderItem={({ item }) => {
-            const youPaid = item.payer_id === me;
-            return (
-              <StatementRow
-                title={youPaid ? 'You paid' : `${otherName ?? 'They'} paid`}
-                // The day is in the strip above, so an empty note shows the time.
-                note={item.note?.trim() || formatTime(item.created_at)}
-                amount={item.amount}
-                positive={youPaid}
-                color={youPaid ? theme.money.in : theme.money.out}
-                trailing={
-                  /* Only when it hasn't gone up yet. A tick on every single row
-                     told you nothing and left the page covered in badges. */
-                  pending.has(item.id) ? (
-                    <MaterialIcons
-                      name="cloud-upload"
-                      size={13}
-                      color={theme.accentTint}
-                      accessibilityLabel="Waiting to sync"
-                    />
-                  ) : undefined
-                }
-                onPress={() =>
-                  item.author_id === me
-                    ? router.push(`/shared-entry?id=${encodeURIComponent(item.id)}` as Href)
-                    : setNotice('Only the person who added an entry can change it.')
-                }
-              />
-            );
-          }}
           ListEmptyComponent={
             // Not "no entries" while the other phone's entries may still be on
             // their way down.

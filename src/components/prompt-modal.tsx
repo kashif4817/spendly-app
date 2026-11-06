@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Animated,
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
   StyleSheet,
   TextInput,
   View,
 } from 'react-native';
 
+import { KeyboardAvoider } from '@/components/keyboard-avoider';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Scrim, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -88,9 +87,7 @@ export function PromptModal({
       onRequestClose={onCancel}>
       {/* The keyboard-avoider wraps the backdrop rather than sitting inside it,
           so the card still measures against a full-width parent. */}
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoider style={styles.flex}>
         <Pressable style={styles.backdrop} onPress={onCancel}>
           {/* Inner Pressable swallows taps so pressing the card doesn't dismiss. */}
           <Pressable onPress={() => {}}>
@@ -167,7 +164,7 @@ export function PromptModal({
             </Animated.View>
           </Pressable>
         </Pressable>
-      </KeyboardAvoidingView>
+      </KeyboardAvoider>
     </Modal>
   );
 }

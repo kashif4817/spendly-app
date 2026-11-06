@@ -8,12 +8,21 @@ import { CURRENCY } from '@/constants/app';
 export function formatMoney(amount: number): string {
   const rounded = Math.round((amount + Number.EPSILON) * 100) / 100;
   const abs = Math.abs(rounded);
-  const hasFraction = Math.round(abs * 100) % 100 !== 0;
-  const withGroups = abs.toLocaleString('en-US', {
-    minimumFractionDigits: hasFraction ? 2 : 0,
-    maximumFractionDigits: 2,
-  });
-  return `${rounded < 0 ? '-' : ''}${CURRENCY}${withGroups}`;
+  const paisa = Math.round(abs * 100) % 100;
+
+  /**
+   * Grouped by hand, NOT through `toLocaleString('en-US', …)`.
+   *
+   * Hermes ships without full ICU, so on a device whose own locale groups with
+   * a point the requested 'en-US' is quietly ignored and 9676 comes back as
+   * "9.676" — a number that reads as nine-point-six-seven-six in an app whose
+   * entire subject is amounts of money. The separator here is a decision, so
+   * it is stated rather than asked for.
+   */
+  const whole = String(Math.floor(abs)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const fraction = paisa ? `.${String(paisa).padStart(2, '0')}` : '';
+
+  return `${rounded < 0 ? '-' : ''}${CURRENCY}${whole}${fraction}`;
 }
 
 /** Format with an explicit +/- sign, e.g. "+$10.00" / "-$4.50". */
@@ -98,6 +107,12 @@ export function parseAmount(text: string): number {
 
   const evaluated = evaluateExpression(cleaned);
   if (evaluated !== null) return evaluated;
+
+  // Only a sum still being TYPED falls back to its first number. A finished
+  // one that refuses to evaluate — "1200/0" is the way to get there — is not
+  // worth 1200, and saying it is would turn a mistyped digit into a recorded
+  // amount. It is worth nothing until it says something.
+  if (!/[+\-*/]$/.test(cleaned)) return 0;
 
   const fallback = Number.parseFloat(cleaned); // e.g. mid-typing "120+"
   return Number.isFinite(fallback) ? fallback : 0;

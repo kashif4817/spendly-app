@@ -141,21 +141,130 @@ export async function forgetPin(): Promise<void> {
   ]);
 }
 
-/** True when the device has enrolled biometrics we can use. */
-export async function biometricAvailable(): Promise<boolean> {
-  const [hasHardware, enrolled] = await Promise.all([
-    LocalAuthentication.hasHardwareAsync(),
-    LocalAuthentication.isEnrolledAsync(),
-  ]);
-  return hasHardware && enrolled;
+/** Which sensor the phone actually has, so the app can name it properly. */
+export type BiometricKind = 'face' | 'fingerprint' | 'iris' | 'none';
+
+export type BiometricInfo = {
+  /** Hardware exists AND the user has enrolled something. The only flag the UI should gate on. */
+  available: boolean;
+  /** There is a sensor, whether or not anything is enrolled. */
+  hasHardware: boolean;
+  /** Something is enrolled in the OS — the app never enrols anything itself. */
+  enrolled: boolean;
+  face: boolean;
+  fingerprint: boolean;
+  iris: boolean;
+  /** What to draw and what to lead with. */
+  primary: BiometricKind;
+  /** What to call it on screen: "Face Unlock", "Fingerprint", "Face or fingerprint". */
+  label: string;
+  /**
+   * How strong the enrolled method is.
+   *
+   * BIOMETRIC_WEAK is a 2D camera face unlock — the kind that can be fooled
+   * by a photograph on some phones. Worth knowing about for something that
+   * guards money, which is why it is surfaced rather than hidden.
+   */
+  level: LocalAuthentication.SecurityLevel;
+};
+
+const NO_BIOMETRICS: BiometricInfo = {
+  available: false,
+  hasHardware: false,
+  enrolled: false,
+  face: false,
+  fingerprint: false,
+  iris: false,
+  primary: 'none',
+  label: 'Biometrics',
+  level: LocalAuthentication.SecurityLevel.NONE,
+};
+
+/**
+ * What this device can unlock with.
+ *
+ * NOTHING IS ENROLLED HERE. `isEnrolledAsync` asks whether the USER has
+ * already set up a fingerprint or face in the system settings; the app simply
+ * borrows it, the same way a banking app does. Spendly never sees a
+ * fingerprint, never stores one, and has nothing to manage if one is removed.
+ */
+export async function getBiometricInfo(): Promise<BiometricInfo> {
+  try {
+    const [hasHardware, enrolled, types, level] = await Promise.all([
+      LocalAuthentication.hasHardwareAsync(),
+      LocalAuthentication.isEnrolledAsync(),
+      LocalAuthentication.supportedAuthenticationTypesAsync(),
+      LocalAuthentication.getEnrolledLevelAsync(),
+    ]);
+
+    const face = types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION);
+    const fingerprint = types.includes(LocalAuthentication.AuthenticationType.FINGERPRINT);
+    const iris = types.includes(LocalAuthentication.AuthenticationType.IRIS);
+
+    // Face leads when the phone has it, because a face target is the one that
+    // needs explaining on screen — a fingerprint reader is somewhere you
+    // already know to put your thumb.
+    const primary: BiometricKind = face
+      ? 'face'
+      : fingerprint
+        ? 'fingerprint'
+        : iris
+          ? 'iris'
+          : 'none';
+
+    const label =
+      face && fingerprint
+        ? 'Face or fingerprint'
+        : face
+          ? 'Face Unlock'
+          : fingerprint
+            ? 'Fingerprint'
+            : iris
+              ? 'Iris'
+              : 'Biometrics';
+
+    return {
+      available: hasHardware && enrolled,
+      hasHardware,
+      enrolled,
+      face,
+      fingerprint,
+      iris,
+      primary,
+      label,
+      level,
+    };
+  } catch {
+    // An older device, or a module that failed to load. No biometrics is a
+    // perfectly good answer; the PIN still works.
+    return NO_BIOMETRICS;
+  }
 }
 
-/** Prompt the OS biometric sheet. Resolves true on success. */
+/** True when the device has enrolled biometrics we can use. */
+export async function biometricAvailable(): Promise<boolean> {
+  return (await getBiometricInfo()).available;
+}
+
+/**
+ * Prompt the OS biometric sheet. Resolves true on success.
+ *
+ * `requireConfirmation: false` matters for face: Android otherwise shows a
+ * "Confirm" button after recognising you, which turns a glance into a glance
+ * plus a tap. Fingerprint ignores it.
+ *
+ * The security level is left at the default ('weak'), which also permits
+ * camera-based face unlock. Stronger would be more correct for a payment app,
+ * but this guards a personal ledger behind a PIN that still works — and
+ * demanding Class 3 would silently disable face unlock on most of the phones
+ * that have it.
+ */
 export async function promptBiometric(promptMessage = 'Unlock Spendly'): Promise<boolean> {
   try {
     const res = await LocalAuthentication.authenticateAsync({
       promptMessage,
       fallbackLabel: 'Enter PIN',
+      requireConfirmation: false,
     });
     return res.success;
   } catch {

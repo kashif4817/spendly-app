@@ -25,6 +25,9 @@ import {
   markBooksDelivered,
   deleteSharedBookLocally,
   renameSharedBookLocally,
+  setBookExpiryLocally,
+  setBookPinnedLocally,
+  setBookVanishLocally,
   getSharedCursor,
   getUncachedMemberIds,
   notifyDbChanged,
@@ -52,6 +55,9 @@ function describe(error: { message?: string } | null): string {
   if (raw.includes('BOOK_FULL')) return 'That book already has two people in it.';
   if (raw.includes('NOT_OWNER')) return 'Only the person who created the book can change the code.';
   if (raw.includes('NOT_SIGNED_IN')) return 'You need to be signed in to do that.';
+  if (raw.includes('expire_after') || raw.includes('vanish_state') || raw.includes('pinned_message')) {
+    return 'This needs the latest chat tables. Run supabase/shared-chat.sql in Supabase.';
+  }
   if (raw.includes('Could not find the function') || raw.includes('schema cache')) {
     return 'Shared books aren’t set up on the server yet. Run supabase/shared-books.sql.';
   }
@@ -111,6 +117,63 @@ export async function renameSharedBook(bookId: string, name: string): Promise<st
 
   renameSharedBookLocally(bookId, clean);
   return clean;
+}
+
+/**
+ * Set how long messages in a book live, in seconds — 0 turns it off.
+ *
+ * Either member may set it, and the server only grants UPDATE on this column
+ * and `name`, so nothing else on the book is reachable from here.
+ *
+ * The server goes first for the same reason a rename does: writing locally
+ * first would leave an `updated_at` newer than the server's if the write
+ * failed, and last-write-wins would then keep a setting the other person
+ * never agreed to — which, for a promise about deleting messages, is the
+ * worst possible thing to get stuck on.
+ */
+export async function setSharedBookExpiry(bookId: string, seconds: number): Promise<void> {
+  const { error } = await supabase
+    .from('shared_books')
+    .update({ expire_after: seconds })
+    .eq('id', bookId);
+  if (error) throw new SharedBookError(describe(error));
+
+  setBookExpiryLocally(bookId, seconds);
+}
+
+/**
+ * Hold one message at the top of a book's thread, or clear the pin with null.
+ *
+ * On the book rather than the message so that either member can pin what the
+ * OTHER one said — writing to their message row is exactly what the server
+ * refuses. Server first, for the same reason a rename is.
+ */
+export async function setSharedBookPin(bookId: string, messageId: string | null): Promise<void> {
+  const { error } = await supabase
+    .from('shared_books')
+    .update({ pinned_message: messageId })
+    .eq('id', bookId);
+  if (error) throw new SharedBookError(describe(error));
+
+  setBookPinnedLocally(bookId, messageId);
+}
+
+/**
+ * Move a book's vanishing session along: '', 'ask:<uuid>' or 'on'.
+ *
+ * The state machine lives in the screen; this is only the write. Server first
+ * again, and here it matters most of all — a local 'on' that never reached
+ * the server would have one person believing the conversation vanishes while
+ * the other's device keeps every word of it.
+ */
+export async function setSharedBookVanish(bookId: string, state: string): Promise<void> {
+  const { error } = await supabase
+    .from('shared_books')
+    .update({ vanish_state: state })
+    .eq('id', bookId);
+  if (error) throw new SharedBookError(describe(error));
+
+  setBookVanishLocally(bookId, state);
 }
 
 /** Mint a new code, invalidating the old one. Owner only. */
@@ -194,5 +257,30 @@ export async function pullShared(): Promise<boolean> {
     return true;
   } catch {
     return false; // offline — try again on the next cycle
+  }
+}
+
+/**
+ * Carry one day's hand-arranged order up to the server.
+ *
+ * Reordering moves rows BOTH members wrote, and `shared_entries` lets only an
+ * author write their own row — the rule that stops either side quietly
+ * rewriting the record. The order is not the record, though: it is a shared
+ * view of it, so it travels by `reorder_entries()`, a definer function either
+ * member may call that touches `sort` and nothing else.
+ *
+ * Best-effort on purpose, and not queued. The order is already applied on this
+ * phone, your own rows are in the outbox anyway (see `reorderSharedDay`), and
+ * the worst a lost call can do is leave the other phone showing its own order
+ * for the rows you don't own. That is a far smaller problem than a reorder
+ * sitting in a queue, retrying for ever, in front of real money.
+ */
+export async function pushEntryOrder(bookId: string, ids: string[]): Promise<void> {
+  if (!bookId || ids.length === 0) return;
+  try {
+    await supabase.rpc('reorder_entries', { p_book_id: bookId, p_ids: ids });
+  } catch {
+    // Offline, or supabase/entry-order.sql hasn't been run yet. Either way the
+    // local order stands and nothing else is affected.
   }
 }

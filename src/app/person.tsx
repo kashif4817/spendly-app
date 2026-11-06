@@ -1,10 +1,11 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Stack, useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Pressable, SectionList, StyleSheet, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ActionSheet } from '@/components/action-sheet';
+import { DragGroup, DragItem } from '@/components/drag-list';
 import { GlassButton } from '@/components/glass';
 import {
   SettleButton,
@@ -22,6 +23,7 @@ import {
   getPersonBalance,
   getPersonEntries,
   getPersonFlags,
+  reorderLedgerDay,
   setPersonArchived,
   setPersonPinned,
 } from '@/db';
@@ -47,12 +49,25 @@ export default function PersonScreen() {
   const balance = useQuery(() => getPersonBalance(person), [person]);
   const flags = useQuery(() => getPersonFlags(person), [person]);
   const [menuOpen, setMenuOpen] = useState(false);
+  /** A row is in the air — the list mustn't scroll out from under it. */
+  const [dragging, setDragging] = useState(false);
 
-  // One section per day, netted the same way as the balance: gave in, took out.
+  /**
+   * One group per day, netted the same way as the balance: gave in, took out.
+   *
+   * `ids` rides along because reordering a day works in ids, and working them
+   * out inside the row would mean rebuilding the whole day's list once per row.
+   */
   const days = useMemo(
-    () => groupByDay(entries, (e) => (e.direction === 'gave' ? e.amount : -e.amount)),
+    () =>
+      groupByDay(entries, (e) => (e.direction === 'gave' ? e.amount : -e.amount)).map((group) => ({
+        ...group,
+        ids: group.data.map((e) => e.id),
+      })),
     [entries]
   );
+
+  const reorderable = days.some((group) => group.ids.length > 1);
 
   const settled = Math.abs(balance) < SETTLED_EPSILON;
   const owesYou = balance > 0;
@@ -101,12 +116,15 @@ export default function PersonScreen() {
         }}
       />
       <SafeAreaView edges={['bottom']} style={styles.safeArea}>
-        <SectionList
-          sections={days}
-          keyExtractor={(e) => e.id}
+        {/* A list of DAYS, not of entries: a day's rows have to be siblings
+            in one view for the one being dragged to lift above the others.
+            See components/drag-list.tsx. */}
+        <FlatList
+          data={days}
+          keyExtractor={(group) => group.day}
+          scrollEnabled={!dragging}
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
-          stickySectionHeadersEnabled={false}
           ListHeaderComponent={
             <View style={styles.head}>
               <StatementBalance
@@ -151,26 +169,36 @@ export default function PersonScreen() {
                 />
               )}
 
-              <StatementHeading />
+              <StatementHeading hint={reorderable ? 'Hold a row to reorder' : undefined} />
             </View>
           }
-          renderSectionHeader={({ section }) => (
-            <StatementDay day={section.day} net={section.net} first={section === days[0]} />
+          renderItem={({ item: group, index: dayIndex }) => (
+            <View>
+              <StatementDay day={group.day} net={group.net} first={dayIndex === 0} />
+              <DragGroup
+                ids={group.ids}
+                onDragChange={setDragging}
+                onReorder={(ids) => reorderLedgerDay(person, group.day, ids)}>
+                {group.data.map((item, index) => {
+                  const gave = item.direction === 'gave';
+                  return (
+                    <DragItem key={item.id} index={index}>
+                      <StatementRow
+                        title={gave ? 'You gave' : 'You took'}
+                        // The day is in the strip above, so an empty note
+                        // shows the time.
+                        note={item.note?.trim() || formatTime(item.created_at)}
+                        amount={item.amount}
+                        positive={gave}
+                        color={gave ? theme.money.in : theme.money.out}
+                        onPress={() => router.push(`/ledger?id=${item.id}` as Href)}
+                      />
+                    </DragItem>
+                  );
+                })}
+              </DragGroup>
+            </View>
           )}
-          renderItem={({ item }) => {
-            const gave = item.direction === 'gave';
-            return (
-              <StatementRow
-                title={gave ? 'You gave' : 'You took'}
-                // The day is in the strip above, so an empty note shows the time.
-                note={item.note?.trim() || formatTime(item.created_at)}
-                amount={item.amount}
-                positive={gave}
-                color={gave ? theme.money.in : theme.money.out}
-                onPress={() => router.push(`/ledger?id=${item.id}` as Href)}
-              />
-            );
-          }}
           ListEmptyComponent={
             <ThemedText type="small" themeColor="textSecondary" style={styles.empty}>
               No entries yet. Use the buttons above to record a give or take.

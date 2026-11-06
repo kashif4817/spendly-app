@@ -1,6 +1,6 @@
 import { Stack, useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 
 import {
   AmountField,
@@ -13,6 +13,7 @@ import {
   PrimaryButton,
 } from '@/components/form';
 import { Segmented } from '@/components/segmented';
+import { KeyboardAvoider } from '@/components/keyboard-avoider';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
@@ -44,7 +45,19 @@ import { offerUndo } from '@/lib/undo';
 export default function SharedEntryScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const params = useLocalSearchParams<{ id?: string; book?: string; payer?: string }>();
+  const params = useLocalSearchParams<{
+    id?: string;
+    book?: string;
+    payer?: string;
+    /**
+     * Filled in when the chat spotted money in a message and offered to
+     * record it (see lib/money-in-text.ts). They are a starting point, not a
+     * decision — the form still has to be saved, which is what makes a guess
+     * from a sentence safe to make.
+     */
+    amount?: string;
+    note?: string;
+  }>();
 
   const me = getCurrentUserId() ?? '';
   const existing = useQuery(() => (params.id ? getSharedEntry(params.id) : null), [params.id]);
@@ -55,8 +68,8 @@ export default function SharedEntryScreen() {
   const otherName = otherId ? (getSharedMemberName(otherId) ?? 'Them') : 'Them';
 
   const [payerId, setPayerId] = useState(params.payer ?? me);
-  const [amount, setAmount] = useState('');
-  const [note, setNote] = useState('');
+  const [amount, setAmount] = useState(params.amount ?? '');
+  const [note, setNote] = useState(params.note ?? '');
   const [day, setDay] = useState(todayKey());
 
   // Fill the form once the entry being edited has loaded.
@@ -132,12 +145,13 @@ export default function SharedEntryScreen() {
   return (
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ title }} />
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoider style={styles.flex}>
         <ScrollView
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
+          // A decimal pad has no Done key on Android, so a drag is the
+          // only gesture left that can put the keyboard away.
+          keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}>
           <View style={styles.payer}>
             <ThemedText type="smallBold">Who paid?</ThemedText>
@@ -203,7 +217,7 @@ export default function SharedEntryScreen() {
             </FormLinks>
           )}
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAvoider>
     </ThemedView>
   );
 }

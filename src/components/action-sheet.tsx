@@ -1,6 +1,6 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useEffect, useRef } from 'react';
-import { Animated, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Animated, Modal, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -21,6 +21,13 @@ type Props = {
   visible: boolean;
   title?: string;
   actions: SheetAction[];
+  /**
+   * Anything that belongs above the choices rather than among them — the
+   * chat's row of tap-backs, say. A row of one-tap targets is not a list of
+   * labelled actions, and forcing it into one would mean six near-identical
+   * rows where a single strip reads better.
+   */
+  header?: React.ReactNode;
   cancelLabel?: string;
   onClose: () => void;
 };
@@ -34,9 +41,17 @@ type Props = {
  * unless `cancelable` is passed. This sheet takes any number of actions, always
  * shows Cancel, and closes on backdrop tap or hardware back.
  */
-export function ActionSheet({ visible, title, actions, cancelLabel = 'Cancel', onClose }: Props) {
+export function ActionSheet({
+  visible,
+  title,
+  actions,
+  header,
+  cancelLabel = 'Cancel',
+  onClose,
+}: Props) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
   const slide = useRef(new Animated.Value(24)).current;
   const opacity = useRef(new Animated.Value(0)).current;
 
@@ -90,7 +105,17 @@ export function ActionSheet({ visible, title, actions, cancelLabel = 'Cancel', o
               </ThemedText>
             )}
 
-            {actions.map((action) => (
+            {header}
+
+            {/* The cap lives on the part that scrolls, not on the sheet, so
+                the sheet still sizes itself from its content — the same shape
+                the entry picker settled on. A chat message can offer eight
+                things to do with it, which is more than a short phone fits. */}
+            <ScrollView
+              style={{ maxHeight: Math.round(height * 0.48) }}
+              showsVerticalScrollIndicator={false}
+              bounces={false}>
+              {actions.map((action) => (
               <Pressable
                 key={action.label}
                 onPress={() => run(action)}
@@ -113,7 +138,8 @@ export function ActionSheet({ visible, title, actions, cancelLabel = 'Cancel', o
                   {action.label}
                 </ThemedText>
               </Pressable>
-            ))}
+              ))}
+            </ScrollView>
 
             <Pressable
               onPress={onClose}

@@ -2,8 +2,6 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Stack, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,6 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { KeyboardAvoider } from '@/components/keyboard-avoider';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { iconFor, type CategoryIcon } from '@/constants/categories';
@@ -73,12 +72,13 @@ export default function BudgetsScreen() {
   return (
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ title: 'Monthly budgets' }} />
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoider style={styles.flex}>
         <ScrollView
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
+          // A decimal pad has no Done key on Android, so a drag is the
+          // only gesture left that can put the keyboard away.
+          keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}>
           <ThemedText type="small" themeColor="textSecondary">
             Limits apply to money out and reset every month. Leave a field empty for no limit.
@@ -106,7 +106,7 @@ export default function BudgetsScreen() {
 
           <SafeAreaView edges={['bottom']} />
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAvoider>
     </ThemedView>
   );
 }

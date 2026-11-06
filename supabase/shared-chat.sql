@@ -34,6 +34,17 @@ create table if not exists public.shared_messages (
   -- forever if that entry were never accepted. The app resolves the id
   -- locally and simply shows the quote as unavailable when it can't.
   entry_id   text,
+  -- The message this one answers, or null for an ordinary message.
+  --
+  -- An id, not a copy of the quoted text, so a retraction empties the quote
+  -- everywhere at once rather than leaving the retracted words preserved
+  -- inside every reply to them.
+  --
+  -- Deliberately NOT a self-referencing foreign key, for the same reason
+  -- entry_id is not one: replies and the messages they answer travel through
+  -- the outbox independently, so a reply can legitimately arrive first. A
+  -- constraint here would reject it and leave it retrying forever.
+  reply_to   text,
   -- When the sender retracted it, or null while it stands.
   --
   -- NOT the same thing as `deleted` below, and the difference is the point.
@@ -43,6 +54,56 @@ create table if not exists public.shared_messages (
   -- thread still says something was said and then taken back — while the body
   -- itself is genuinely gone from both devices and from here.
   deleted_at text,
+  -- When this message deletes itself, or null if it is permanent.
+  --
+  -- Written by the SENDER from the book's `expire_after` at the moment of
+  -- sending, and never recomputed. Changing the setting therefore leaves
+  -- messages already sent exactly as they were promised to be: turning
+  -- disappearing messages on does not reach back and burn the history, and
+  -- turning it off does not resurrect something that was supposed to go.
+  expires_at text,
+  -- When the sender last changed the words, or null if they never did.
+  --
+  -- The time rather than a flag, so "edited" can be shown with the moment it
+  -- happened. Only the sender can set it — the message UPDATE policy already
+  -- says so — which is what stops an edit being a way to put words in
+  -- someone else's mouth.
+  edited_at text,
+  -- Set when the message was sent into a VANISHING session, null otherwise.
+  --
+  -- Different from `expires_at`, and deliberately: that is a clock the sender
+  -- starts, this is a mode both people agreed to. A vanishing message has no
+  -- deadline at all — it lives exactly as long as the thread stays open, and
+  -- each device drops its own copy the moment that person walks away.
+  vanish_at text,
+  created_at text not null,
+  updated_at timestamptz not null default now(),
+  deleted    boolean not null default false
+);
+
+/**
+ * Tap-backs.
+ *
+ * A row per (message, person) rather than a column on the message, because
+ * the whole point is reacting to what the OTHER person said — and the message
+ * table's UPDATE policy deliberately lets nobody but the sender touch their
+ * own row. A separate table keeps that intact: you own your reaction, they
+ * own their message, and neither policy has to be loosened.
+ */
+create table if not exists public.shared_reactions (
+  -- '<message_id>:<user_id>'. One reaction per person per message, so
+  -- reacting again REPLACES the old one instead of piling up, and the same
+  -- person on two devices produces one row rather than two.
+  id         text primary key,
+  book_id    text not null references public.shared_books (id) on delete cascade,
+  -- Not a foreign key, for the same reason entry_id isn't: a reaction and the
+  -- message it is about travel through the outbox independently, so the
+  -- reaction can legitimately arrive first.
+  message_id text not null,
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  -- Cleared rather than deleted when you take a reaction back, so the removal
+  -- syncs as an ordinary update like everything else here.
+  emoji      text not null default '',
   created_at text not null,
   updated_at timestamptz not null default now(),
   deleted    boolean not null default false
@@ -76,6 +137,36 @@ create table if not exists public.push_tokens (
 -- Columns added after the first release. Here as well as in the table above so
 -- that re-running this file upgrades a project that already has these tables.
 alter table public.shared_messages add column if not exists deleted_at text;
+alter table public.shared_messages add column if not exists reply_to text;
+alter table public.shared_messages add column if not exists expires_at text;
+
+-- How long a message in this book lives, in seconds; 0 is off.
+--
+-- On the BOOK rather than on each member: disappearing messages are an
+-- agreement between two people about one conversation, and a setting only one
+-- side could see would be a promise the other never made.
+alter table public.shared_books add column if not exists expire_after integer not null default 0;
+alter table public.shared_messages add column if not exists edited_at text;
+alter table public.shared_messages add column if not exists vanish_at text;
+
+-- The one message held at the top of this book's thread, or null.
+--
+-- On the BOOK rather than on the message, because pinning what the OTHER
+-- person said would mean writing to their message row — which is exactly what
+-- `message_sender_write` exists to prevent. One pin per conversation is also
+-- the better rule: a wall of pins is just the thread again.
+alter table public.shared_books add column if not exists pinned_message text;
+
+-- Whether this book is in a vanishing session, and who asked for one.
+--
+--   ''           — off
+--   'ask:<uuid>' — that member has invited the other into one
+--   'on'         — both agreed; messages sent now clear when either walks away
+--
+-- An invitation rather than a switch one person flips. The thread sits beside
+-- a shared ledger, so "this conversation leaves no record" is a thing both
+-- people should have agreed to, not something one of them discovers later.
+alter table public.shared_books add column if not exists vanish_state text not null default '';
 alter table public.shared_reads
   add column if not exists delivered_at text not null default '';
 
@@ -83,6 +174,12 @@ create index if not exists shared_messages_book_created_idx
   on public.shared_messages (book_id, created_at);
 create index if not exists shared_messages_book_updated_idx
   on public.shared_messages (book_id, updated_at);
+create index if not exists shared_messages_expiry_idx
+  on public.shared_messages (expires_at) where expires_at is not null;
+create index if not exists shared_reactions_message_idx
+  on public.shared_reactions (message_id);
+create index if not exists shared_reactions_book_updated_idx
+  on public.shared_reactions (book_id, updated_at);
 create index if not exists shared_reads_user_idx
   on public.shared_reads (user_id);
 create index if not exists push_tokens_user_idx
@@ -91,6 +188,7 @@ create index if not exists push_tokens_user_idx
 -- 2) Row Level Security ------------------------------------------------------
 
 alter table public.shared_messages enable row level security;
+alter table public.shared_reactions enable row level security;
 alter table public.shared_reads enable row level security;
 alter table public.push_tokens enable row level security;
 
@@ -108,6 +206,21 @@ create policy message_insert on public.shared_messages for insert to authenticat
 drop policy if exists message_sender_write on public.shared_messages;
 create policy message_sender_write on public.shared_messages for update to authenticated
   using (sender_id = auth.uid()) with check (sender_id = auth.uid());
+
+-- Reactions: any member reads them all — a tap-back nobody else can see is
+-- not a reply — but you may only write your own. Same split as a read marker,
+-- and for the same reason: neither can be forged on someone else's behalf.
+drop policy if exists reaction_read on public.shared_reactions;
+create policy reaction_read on public.shared_reactions for select to authenticated
+  using (public.is_book_member(book_id));
+
+drop policy if exists reaction_insert on public.shared_reactions;
+create policy reaction_insert on public.shared_reactions for insert to authenticated
+  with check (public.is_book_member(book_id) and user_id = auth.uid());
+
+drop policy if exists reaction_own_write on public.shared_reactions;
+create policy reaction_own_write on public.shared_reactions for update to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 -- Read markers: both members may READ each other's marker, which is what lets
 -- the app show "Seen". Writing one is own-row only, so a read receipt can
@@ -137,7 +250,7 @@ create policy own_push_token on public.push_tokens for all to authenticated
 do $$
 declare t text;
 begin
-  foreach t in array array['shared_messages', 'shared_reads', 'push_tokens']
+  foreach t in array array['shared_messages', 'shared_reactions', 'shared_reads', 'push_tokens']
   loop
     execute format('drop trigger if exists set_updated_at on public.%I', t);
     execute format(
@@ -152,13 +265,25 @@ $$;
 -- rather than leaving it in place.
 
 revoke all on public.shared_messages from authenticated;
+revoke all on public.shared_reactions from authenticated;
 revoke all on public.shared_reads from authenticated;
 revoke all on public.push_tokens from authenticated;
 
--- Deleting a message is soft (`deleted = true`), so UPDATE covers it.
+-- Deleting a message is soft (`deleted = true`), so UPDATE covers it. A
+-- message that has reached its `expires_at` is the one exception: both devices
+-- drop it outright, which the sender turns into `deleted = true` here.
 grant select, insert, update on public.shared_messages to authenticated;
+grant select, insert, update on public.shared_reactions to authenticated;
 grant select, insert, update on public.shared_reads to authenticated;
 grant select, insert, update on public.push_tokens to authenticated;
+
+-- The disappearing-messages setting joins the book's name as the second thing
+-- either member may change. Everything else on a book — the join code, the
+-- owner — stays out of a client's reach, because the grant is per column.
+--
+-- Repeated here as well as in shared-books.sql so that re-running EITHER file
+-- leaves both columns writable; that file revokes before it grants.
+grant update (name, expire_after, pinned_message, vanish_state) on public.shared_books to authenticated;
 
 -- 5) Push notifications ------------------------------------------------------
 --
@@ -225,9 +350,16 @@ begin
   -- The title carries who it's from; the book only needs saying when it has a
   -- name of its own, and a message about an entry says so rather than opening
   -- with an empty line when the sender sent the quote alone.
-  v_preview := coalesce(nullif(btrim(new.body), ''),
-                        case when new.entry_id is not null then 'Shared an entry'
-                             else 'Sent a message' end);
+  -- A vanishing message is never previewed. The whole promise is that it
+  -- leaves no copy behind, and a notification that quotes it would sit in the
+  -- shade long after the message itself had gone from both devices.
+  if new.vanish_at is not null then
+    v_preview := 'Sent a message';
+  else
+    v_preview := coalesce(nullif(btrim(new.body), ''),
+                          case when new.entry_id is not null then 'Shared an entry'
+                               else 'Sent a message' end);
+  end if;
 
   begin
     perform net.http_post(
@@ -278,7 +410,7 @@ create trigger notify_message after insert on public.shared_messages
 do $$
 declare t text;
 begin
-  foreach t in array array['shared_messages', 'shared_reads']
+  foreach t in array array['shared_messages', 'shared_reactions', 'shared_reads']
   loop
     begin
       execute format('alter publication supabase_realtime add table public.%I', t);
@@ -290,4 +422,5 @@ end;
 $$;
 
 alter table public.shared_messages replica identity full;
+alter table public.shared_reactions replica identity full;
 alter table public.shared_reads replica identity full;

@@ -69,6 +69,33 @@ function recordFailure(
   };
 }
 
+/**
+ * Columns a row may be sent WITHOUT, when the project doesn't have them yet.
+ *
+ * An over-the-air update can reach a phone before the SQL that adds its newest
+ * column has been run; PostgREST reports that as PGRST204 — "Could not find
+ * the 'sort' column of 'ledger_entries' in the schema cache". The default
+ * answer to that is the one below: leave the row queued and send it whole once
+ * the column exists. Dropping a column to get a row accepted loses whatever
+ * was in it, and for most columns that is a quiet lie about the data — a
+ * message that uploads without its `edited_at` reads as never edited.
+ *
+ * A column earns a place here only when the row is worth more than the column:
+ *
+ *   • `sort` is which rung of a day an entry sits on. Losing it costs an
+ *     arrangement its owner can redo with one drag, and the next reorder sends
+ *     it again — whereas holding the row back would keep real money from
+ *     syncing over a presentational detail.
+ */
+const OPTIONAL_COLUMNS = new Set(['sort']);
+
+/** The droppable column the server says it doesn't have, or null. */
+function missingColumn(error: { code?: string; message?: string } | null): string | null {
+  if (!error || error.code !== 'PGRST204') return null;
+  const name = /'([^']+)' column/.exec(error.message ?? '')?.[1];
+  return name && OPTIONAL_COLUMNS.has(name) ? name : null;
+}
+
 /** Build the row object to upload, forcing the owner and a live (non-deleted) state. */
 function buildUploadRow(table: AnyTable, local: Record<string, any>, userId: string) {
   const row: Record<string, any> = {};
@@ -133,7 +160,23 @@ async function push(userId: string, only?: readonly string[]): Promise<boolean> 
         removeOutboxEntry(entry.seq);
         continue;
       }
-      const { error } = await supabase.from(table).upsert(buildUploadRow(table, local, userId));
+      const row = buildUploadRow(table, local, userId);
+      let { error } = await supabase.from(table).upsert(row);
+
+      // A droppable column this build knows about and the project doesn't yet
+      // (see OPTIONAL_COLUMNS): send the rest of the row rather than hold a
+      // real entry hostage to a presentational detail. Any other unknown
+      // column falls through to the failure path below and stays queued, so
+      // nothing is quietly lost.
+      //
+      // `absent in row` is what keeps this a loop and not a spin: a name we
+      // did not actually send cannot be dropped, so asking again would get the
+      // same answer for ever.
+      for (let absent = missingColumn(error); absent && absent in row; absent = missingColumn(error)) {
+        delete row[absent];
+        ({ error } = await supabase.from(table).upsert(row));
+      }
+
       if (error) {
         if (!isMissingTable(error)) recordFailure(table, entry.row_id, 'upsert', error);
         allSent = false;

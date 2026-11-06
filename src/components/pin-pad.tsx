@@ -16,12 +16,22 @@ type Props = {
   error?: boolean;
   /** Show a biometric key in the bottom-left slot. */
   onBiometric?: () => void;
+  /** Which sensor the key stands for, so the icon matches the hardware. */
+  biometricKind?: 'face' | 'fingerprint' | 'iris' | 'none';
 };
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
 
 /** A numeric PIN entry: filled dots + a 10-key pad with optional biometric key. */
-export function PinPad({ value, onChange, onComplete, length = PIN_LENGTH, error, onBiometric }: Props) {
+export function PinPad({
+  value,
+  onChange,
+  onComplete,
+  length = PIN_LENGTH,
+  error,
+  onBiometric,
+  biometricKind = 'fingerprint',
+}: Props) {
   const theme = useTheme();
 
   const press = (digit: string) => {
@@ -68,8 +78,16 @@ export function PinPad({ value, onChange, onComplete, length = PIN_LENGTH, error
             onPress={onBiometric}
             style={({ pressed }) => [styles.key, pressed && theme.glass]}
             accessibilityRole="button"
-            accessibilityLabel="Unlock with biometrics">
-            <MaterialIcons name="fingerprint" size={30} color={theme.accent} />
+            accessibilityLabel={
+              biometricKind === 'face' ? 'Unlock with your face' : 'Unlock with your fingerprint'
+            }>
+            <MaterialIcons
+              // A fingerprint glyph on a phone that unlocks by face is a small
+              // wrongness people cannot name but do notice.
+              name={biometricKind === 'face' || biometricKind === 'iris' ? 'face' : 'fingerprint'}
+              size={30}
+              color={theme.accent}
+            />
           </Pressable>
         ) : (
           <View style={styles.key} />

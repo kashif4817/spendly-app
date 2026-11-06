@@ -3,8 +3,6 @@ import { Stack, useRouter, type Href } from 'expo-router';
 import { useState } from 'react';
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,6 +11,7 @@ import {
 } from 'react-native';
 
 import { Segmented } from '@/components/segmented';
+import { KeyboardAvoider } from '@/components/keyboard-avoider';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
@@ -68,10 +67,11 @@ export default function SharedNewScreen() {
   return (
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ title: 'Shared book' }} />
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <KeyboardAvoider style={styles.flex}>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag">
           <View style={styles.intro}>
             <View style={[styles.introIcon, theme.glassWeak]}>
               <MaterialIcons name="menu-book" size={26} color={theme.accentTint} />
@@ -177,7 +177,7 @@ export default function SharedNewScreen() {
             </ThemedText>
           )}
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAvoider>
     </ThemedView>
   );
 }

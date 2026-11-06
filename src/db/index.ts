@@ -85,6 +85,12 @@ export type LedgerEntry = {
   note: string;
   day: string;
   created_at: string;
+  /**
+   * Where this entry sits inside its day when someone has arranged the day by
+   * hand. 0 means "nobody has", and the list falls back to newest-first.
+   * See `reorderLedgerDay`.
+   */
+  sort: number;
 };
 
 /** One person's rolled-up standing. */
@@ -97,12 +103,31 @@ export type PersonBalance = {
   lastDay: string;
   pinned: number; // 1 = kept at the top of the people list
   archived: number; // 1 = hidden from the main list
+  dueDay: string; // '' when nothing is expected by a date
+  phone: string; // '' when no number is on file
 };
 
 /** Per-person display flags. Stored in their own synced table (see person_flags). */
 export type PersonFlags = {
   pinned: boolean;
   archived: boolean;
+  /**
+   * The day this balance is expected back, or '' for no date.
+   *
+   * On the PERSON rather than on an entry, because it belongs to the balance:
+   * lending someone another 500 does not reset when the first 500 was due,
+   * and three entries with three dates is three answers to a question that
+   * only has one.
+   */
+  dueDay: string;
+  /**
+   * Their number, if they gave you one — so a reminder can go to them rather
+   * than out through a share sheet and back.
+   *
+   * `person_flags` is own-rows-only on the server, which is the only reason a
+   * phone number is allowed anywhere near it.
+   */
+  phone: string;
 };
 
 /** Totals across everyone. */
@@ -125,6 +150,61 @@ export type SharedBook = {
   owner_id: string;
   join_code: string | null;
   code_expires_at: string | null;
+  /**
+   * How long a message in this book lives, in seconds — 0 for "forever".
+   *
+   * On the BOOK rather than per member: disappearing messages are an agreement
+   * between two people about one conversation, and a setting only one side
+   * could see would be a promise the other never made.
+   */
+  expire_after: number;
+  /** The one message held at the top of this book's thread, or null. */
+  pinned_message: string | null;
+  /**
+   * Whether this book is in a vanishing session, and who asked for one.
+   *
+   *   ''           — off
+   *   'ask:<uuid>' — that member has invited the other into one
+   *   'on'         — both agreed
+   *
+   * An invitation rather than a switch one person flips: the thread sits
+   * beside a shared ledger, so "this conversation leaves no record" is
+   * something both people should have agreed to.
+   */
+  vanish_state: string;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Pulled apart from `vanish_state`, which is one column doing three jobs. */
+export type VanishSession =
+  | { mode: 'off' }
+  | { mode: 'asked'; by: string }
+  | { mode: 'on' };
+
+export function readVanish(state: string | null | undefined): VanishSession {
+  if (state === 'on') return { mode: 'on' };
+  if (state && state.startsWith('ask:')) return { mode: 'asked', by: state.slice(4) };
+  return { mode: 'off' };
+}
+
+/**
+ * One person's tap-back on one message.
+ *
+ * A row rather than a column on the message, because reacting to what the
+ * OTHER person said would otherwise mean letting either member write to the
+ * other's message row — and that is the one thing the message policy exists
+ * to prevent. You own your reaction; they own their message.
+ *
+ * `emoji` empty means the reaction was taken back. The row stays so the
+ * removal syncs as an ordinary update, exactly like a retracted message.
+ */
+export type SharedReaction = {
+  id: string;
+  book_id: string;
+  message_id: string;
+  user_id: string;
+  emoji: string;
   created_at: string;
   updated_at: string;
 };
@@ -146,6 +226,8 @@ export type SharedEntry = {
   day: string;
   created_at: string;
   updated_at: string;
+  /** Hand-arranged position within the day. 0 = never dragged. */
+  sort: number;
 };
 
 /**
@@ -162,6 +244,45 @@ export type SharedMessage = {
   sender_id: string;
   body: string;
   entry_id: string | null;
+  /**
+   * The message this one is a reply to, or null for an ordinary message.
+   *
+   * An id rather than a copy of the text. A reply quotes whatever that message
+   * says NOW, so a retraction empties the quote everywhere instead of leaving
+   * the retracted words preserved inside every reply to them — the one place
+   * "delete for everyone" could otherwise be undone.
+   *
+   * Nothing guarantees the target is on this device: it may have been sent
+   * before this member joined, or be a row a pull has not reached yet. The
+   * screen resolves it locally and shows the quote as unavailable when it
+   * cannot, exactly as it does for a quoted entry.
+   */
+  reply_to: string | null;
+  /**
+   * When this message deletes itself, or null if it is permanent.
+   *
+   * Stamped by the SENDER from the book's `expire_after` as it is sent, and
+   * never recomputed. That is what makes the setting a promise rather than a
+   * switch: turning disappearing messages on does not reach back and burn the
+   * history, and turning it off does not resurrect what was meant to go.
+   */
+  expires_at: string | null;
+  /**
+   * When the sender last changed the words, or null if they never did.
+   *
+   * The time rather than a flag, so "edited" can be shown with the moment it
+   * happened — and so a pull can tell a genuine edit from a row that merely
+   * synced again.
+   */
+  edited_at: string | null;
+  /**
+   * Set when the message was sent into a VANISHING session, null otherwise.
+   *
+   * Not a deadline like `expires_at`. A vanishing message lives exactly as
+   * long as the thread stays open, and each device drops its own copy the
+   * moment that person walks away from it.
+   */
+  vanish_at: string | null;
   /**
    * When the sender retracted it, or null while it stands.
    *
@@ -208,6 +329,8 @@ export type SharedBookSummary = {
   lastDay: string;
   pinned: number; // 1 = kept at the top of the people list
   archived: number; // 1 = hidden from the main list
+  /** The day this book is meant to be squared up by, or ''. */
+  dueDay: string;
   /** True while nobody has redeemed the join code yet. */
   pending: boolean;
   /** Messages from the other member that you haven't read yet. */
@@ -288,6 +411,7 @@ export const SHARED_TABLES = [
   'shared_book_members',
   'shared_entries',
   'shared_messages',
+  'shared_reactions',
   'shared_reads',
 ] as const;
 
@@ -296,10 +420,33 @@ export type SharedTable = (typeof SHARED_TABLES)[number];
 export type AnyTable = SyncTable | SharedTable;
 
 export const SHARED_TABLE_COLUMNS: Record<SharedTable, string[]> = {
-  shared_books: ['name', 'owner_id', 'join_code', 'code_expires_at', 'created_at'],
+  shared_books: [
+    'name',
+    'owner_id',
+    'join_code',
+    'code_expires_at',
+    'expire_after',
+    'pinned_message',
+    'vanish_state',
+    'created_at',
+  ],
   shared_book_members: ['book_id', 'user_id', 'joined_at'],
-  shared_entries: ['book_id', 'author_id', 'payer_id', 'amount', 'note', 'day', 'created_at'],
-  shared_messages: ['book_id', 'sender_id', 'body', 'entry_id', 'deleted_at', 'created_at'],
+  shared_entries: [
+    'book_id', 'author_id', 'payer_id', 'amount', 'note', 'day', 'created_at', 'sort',
+  ],
+  shared_messages: [
+    'book_id',
+    'sender_id',
+    'body',
+    'entry_id',
+    'reply_to',
+    'expires_at',
+    'edited_at',
+    'vanish_at',
+    'deleted_at',
+    'created_at',
+  ],
+  shared_reactions: ['book_id', 'message_id', 'user_id', 'emoji', 'created_at'],
   shared_reads: ['book_id', 'user_id', 'delivered_at', 'last_read_at'],
 };
 
@@ -317,6 +464,7 @@ export const SHARED_OWNER_COLUMN: Record<SharedTable, string> = {
   shared_book_members: 'user_id',
   shared_entries: 'author_id',
   shared_messages: 'sender_id',
+  shared_reactions: 'user_id',
   shared_reads: 'user_id',
 };
 
@@ -331,8 +479,8 @@ export const TABLE_COLUMNS: Record<SyncTable, string[]> = {
   loans: ['direction', 'person', 'amount', 'note', 'day', 'created_at'],
   loan_payments: ['loan_id', 'amount', 'day', 'created_at'],
   budgets: ['category', 'amount'],
-  ledger_entries: ['person', 'direction', 'amount', 'note', 'day', 'created_at'],
-  person_flags: ['person', 'pinned', 'archived'],
+  ledger_entries: ['person', 'direction', 'amount', 'note', 'day', 'created_at', 'sort'],
+  person_flags: ['person', 'pinned', 'archived', 'due_day', 'phone'],
 };
 
 /**
@@ -346,6 +494,19 @@ export function columnsFor(table: AnyTable): string[] {
 
 const newId = () => Crypto.randomUUID();
 const nowIso = () => new Date().toISOString();
+
+/**
+ * How entries are ordered WITHIN a day, in both statements.
+ *
+ * `sort` is 1-based once a day has been arranged by hand and 0 (or null, on a
+ * row pulled from a server that predates the column) when it hasn't — so 0
+ * sorting first is doing two jobs at once: an untouched day falls through to
+ * `created_at DESC`, the order the app has always used, and an entry added to
+ * a day that HAS been arranged appears at the top of it, where a new entry
+ * belongs. `created_at` stays as the tiebreaker rather than being replaced,
+ * because several rows legitimately share a sort of 0.
+ */
+const MANUAL_ORDER = 'COALESCE(sort, 0) ASC, created_at DESC';
 
 // The account whose rows new writes belong to. Set on sign-in; null when signed
 // out (the app is gated behind auth, so writes only happen while it's set).
@@ -363,7 +524,7 @@ export function getCurrentUserId(): string | null {
 // live-refresh hook (see db/hooks.ts).
 const db = SQLite.openDatabaseSync('expenses.db', { enableChangeListener: true });
 
-const DATABASE_VERSION = 10;
+const DATABASE_VERSION = 15;
 
 let dbInitError: string | null = null;
 
@@ -499,6 +660,9 @@ function createSharedTables(): void {
       owner_id TEXT NOT NULL,
       join_code TEXT,
       code_expires_at TEXT,
+      expire_after INTEGER NOT NULL DEFAULT 0,
+      pinned_message TEXT,
+      vanish_state TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -521,6 +685,10 @@ function createSharedTables(): void {
       note TEXT NOT NULL DEFAULT '',
       day TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      -- Nullable on purpose: a pull from a server that hasn't run
+      -- supabase/entry-order.sql yet binds null here (see applyRemoteRows),
+      -- and every read COALESCEs it to 0.
+      sort INTEGER DEFAULT 0,
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_shared_entries_book ON shared_entries(book_id);
@@ -551,12 +719,30 @@ function createChatTables(): void {
       sender_id TEXT NOT NULL,
       body TEXT NOT NULL DEFAULT '',
       entry_id TEXT,
+      reply_to TEXT,
+      expires_at TEXT,
+      edited_at TEXT,
+      vanish_at TEXT,
       deleted_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_shared_messages_book
       ON shared_messages(book_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_shared_messages_expiry
+      ON shared_messages(expires_at);
+
+    CREATE TABLE IF NOT EXISTS shared_reactions (
+      id TEXT PRIMARY KEY NOT NULL,
+      book_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      emoji TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_shared_reactions_message
+      ON shared_reactions(message_id);
 
     CREATE TABLE IF NOT EXISTS shared_reads (
       id TEXT PRIMARY KEY NOT NULL,
@@ -576,16 +762,58 @@ function createChatTables(): void {
  * own for the v9 → v10 upgrade).
  *
  * `deleted_at` is what lets a retracted message leave a line behind instead of
- * a hole; `delivered_at` is what turns one tick into two. Both are guarded, so
- * this is safe to run over tables that already have them.
+ * a hole; `delivered_at` is what turns one tick into two; `reply_to` points a
+ * message at the one it answers; `expires_at` and `expire_after` are
+ * disappearing messages. All are guarded, so this is safe to run over tables
+ * that already have them — and it runs on every upgrade path, which is why
+ * each release's columns can simply be appended here.
  */
 function addChatColumns(): void {
   if (!hasColumn('shared_messages', 'deleted_at')) {
     db.execSync('ALTER TABLE shared_messages ADD COLUMN deleted_at TEXT');
   }
+  if (!hasColumn('shared_messages', 'reply_to')) {
+    db.execSync('ALTER TABLE shared_messages ADD COLUMN reply_to TEXT');
+  }
+  if (!hasColumn('shared_messages', 'expires_at')) {
+    db.execSync('ALTER TABLE shared_messages ADD COLUMN expires_at TEXT');
+    db.execSync(
+      'CREATE INDEX IF NOT EXISTS idx_shared_messages_expiry ON shared_messages(expires_at)'
+    );
+  }
+  if (!hasColumn('shared_messages', 'edited_at')) {
+    db.execSync('ALTER TABLE shared_messages ADD COLUMN edited_at TEXT');
+  }
+  if (!hasColumn('shared_messages', 'vanish_at')) {
+    db.execSync('ALTER TABLE shared_messages ADD COLUMN vanish_at TEXT');
+  }
+  if (!hasColumn('shared_books', 'expire_after')) {
+    db.execSync('ALTER TABLE shared_books ADD COLUMN expire_after INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!hasColumn('shared_books', 'pinned_message')) {
+    db.execSync('ALTER TABLE shared_books ADD COLUMN pinned_message TEXT');
+  }
+  if (!hasColumn('shared_books', 'vanish_state')) {
+    db.execSync("ALTER TABLE shared_books ADD COLUMN vanish_state TEXT NOT NULL DEFAULT ''");
+  }
   if (!hasColumn('shared_reads', 'delivered_at')) {
     db.execSync("ALTER TABLE shared_reads ADD COLUMN delivered_at TEXT NOT NULL DEFAULT ''");
   }
+  // Its own statement rather than part of createChatTables(), so a database
+  // that already had the chat tables still gains it on upgrade.
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS shared_reactions (
+      id TEXT PRIMARY KEY NOT NULL,
+      book_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      emoji TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_shared_reactions_message
+      ON shared_reactions(message_id);
+  `);
 }
 
 /**
@@ -596,6 +824,38 @@ function addChatColumns(): void {
  * The id is derived from the name rather than random, so two devices that pin
  * the same person independently produce the SAME row instead of duplicates.
  */
+/**
+ * Columns person_flags gained after its first release.
+ *
+ * Guarded, so it is safe over a table that already has them — and called from
+ * the creator below as well as from the upgrade path, so a fresh install and
+ * an upgrade land in exactly the same place.
+ */
+/**
+ * The hand-arranged entry order (v14 → v15).
+ *
+ * Nothing is backfilled: 0 on every existing row is exactly what "this day has
+ * never been arranged by hand" means, and the statement queries already read
+ * that as newest-first — the order the app has always shown.
+ */
+function addEntryOrderColumns(): void {
+  if (!hasColumn('ledger_entries', 'sort')) {
+    db.execSync('ALTER TABLE ledger_entries ADD COLUMN sort INTEGER DEFAULT 0');
+  }
+  if (!hasColumn('shared_entries', 'sort')) {
+    db.execSync('ALTER TABLE shared_entries ADD COLUMN sort INTEGER DEFAULT 0');
+  }
+}
+
+function addPersonFlagColumns(): void {
+  if (!hasColumn('person_flags', 'due_day')) {
+    db.execSync('ALTER TABLE person_flags ADD COLUMN due_day TEXT');
+  }
+  if (!hasColumn('person_flags', 'phone')) {
+    db.execSync('ALTER TABLE person_flags ADD COLUMN phone TEXT');
+  }
+}
+
 function createPersonFlagsTable(): void {
   db.execSync(`
     CREATE TABLE IF NOT EXISTS person_flags (
@@ -604,10 +864,17 @@ function createPersonFlagsTable(): void {
       person TEXT NOT NULL,
       pinned INTEGER NOT NULL DEFAULT 0,
       archived INTEGER NOT NULL DEFAULT 0,
+      -- Nullable, deliberately. A pull from a project whose SQL has not been
+      -- run yet carries no value for these at all; NOT NULL would turn that
+      -- into a failed transaction rather than an empty field. Every reader
+      -- coalesces to ''.
+      due_day TEXT,
+      phone TEXT,
       updated_at TEXT NOT NULL,
       UNIQUE (person)
     );
   `);
+  addPersonFlagColumns();
 }
 
 /** The people-ledger table (also created on its own for the v5 → v6 upgrade). */
@@ -622,6 +889,9 @@ function createLedgerTable(): void {
       note TEXT NOT NULL DEFAULT '',
       day TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      -- See the note on shared_entries.sort: nullable so a pull that predates
+      -- the server column can still be applied.
+      sort INTEGER DEFAULT 0,
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_ledger_person ON ledger_entries(person);
@@ -786,7 +1056,7 @@ export function migrate(): void {
     // Fresh install → create the current schema directly. Preset categories are
     // NOT seeded here; they're seeded into a brand-new account on sign-up.
     createDataTables();
-    version = 10;
+    version = 15;
   } else {
     if (version < 4) {
       // Existing pre-sync database (integer ids) → migrate its data to the
@@ -833,6 +1103,39 @@ export function migrate(): void {
       // which the next pull corrects on its own.
       addChatColumns();
       version = 10;
+    }
+    if (version === 10) {
+      // Replies. Every message already in the thread answers nothing in
+      // particular, which is exactly what a null reply_to means — so the
+      // column is added and nothing is backfilled.
+      addChatColumns();
+      version = 11;
+    }
+    if (version === 11) {
+      // Reactions and disappearing messages. An empty reactions table and a
+      // zero expiry are what every existing book already means, so again
+      // there is nothing to backfill — just the columns and the new table.
+      addChatColumns();
+      version = 12;
+    }
+    if (version === 12) {
+      // Edits, a pinned message, and vanishing sessions. Null, null and ''
+      // are what every message and book already means, so nothing is
+      // backfilled here either.
+      addChatColumns();
+      version = 13;
+    }
+    if (version === 13) {
+      // A due date and a phone number per person. No date and no number is
+      // what every person already means, so again nothing is backfilled.
+      addPersonFlagColumns();
+      version = 14;
+    }
+    if (version === 14) {
+      // Hand-arranged entry order. Every existing row stays at 0, which the
+      // statement queries read as "newest first" — so nothing moves.
+      addEntryOrderColumns();
+      version = 15;
     }
   }
 
@@ -1412,10 +1715,10 @@ export function restoreLedgerEntry(entry: LedgerEntry): void {
   const updatedAt = nowIso();
   db.runSync(
     `INSERT OR REPLACE INTO ledger_entries
-       (id, user_id, person, direction, amount, note, day, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, user_id, person, direction, amount, note, day, created_at, sort, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     entry.id, currentUserId ?? '', entry.person, entry.direction, entry.amount,
-    entry.note, entry.day, entry.created_at, updatedAt
+    entry.note, entry.day, entry.created_at, entry.sort ?? 0, updatedAt
   );
   enqueue('ledger_entries', entry.id, 'upsert', updatedAt);
   notifyDbChanged();
@@ -1469,6 +1772,8 @@ function setPersonFlags(person: string, patch: Partial<PersonFlags>): void {
   const current = getPersonFlags(name);
   const pinned = (patch.pinned ?? current.pinned) ? 1 : 0;
   const archived = (patch.archived ?? current.archived) ? 1 : 0;
+  const dueDay = patch.dueDay ?? current.dueDay;
+  const phone = patch.phone ?? current.phone;
 
   // Clear any stray row for the same person under a different id, so the
   // UNIQUE (person) constraint can never block the upsert below. Queue the
@@ -1482,13 +1787,16 @@ function setPersonFlags(person: string, patch: Partial<PersonFlags>): void {
     enqueue('person_flags', stray.id, 'delete', updatedAt);
   }
   db.runSync(
-    `INSERT INTO person_flags (id, user_id, person, pinned, archived, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO person_flags
+       (id, user_id, person, pinned, archived, due_day, phone, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (id) DO UPDATE SET
        pinned = excluded.pinned,
        archived = excluded.archived,
+       due_day = excluded.due_day,
+       phone = excluded.phone,
        updated_at = excluded.updated_at`,
-    id, currentUserId ?? '', name, pinned, archived, updatedAt
+    id, currentUserId ?? '', name, pinned, archived, dueDay, phone, updatedAt
   );
   enqueue('person_flags', id, 'upsert', updatedAt);
 }
@@ -1543,13 +1851,74 @@ export function setPersonArchived(person: string, archived: boolean): void {
   setPersonFlags(person, archived ? { archived: true, pinned: false } : { archived: false });
 }
 
-/** A person's current flags. Missing row = not pinned, not archived. */
+/** A person's current flags. Missing row = not pinned, not archived, no date. */
 export function getPersonFlags(person: string): PersonFlags {
-  const row = db.getFirstSync<{ pinned: number; archived: number }>(
-    'SELECT pinned, archived FROM person_flags WHERE person = ?',
-    person.trim()
-  );
-  return { pinned: !!row?.pinned, archived: !!row?.archived };
+  const row = db.getFirstSync<{
+    pinned: number;
+    archived: number;
+    due_day: string;
+    phone: string;
+  }>('SELECT pinned, archived, due_day, phone FROM person_flags WHERE person = ?', person.trim());
+  return {
+    pinned: !!row?.pinned,
+    archived: !!row?.archived,
+    dueDay: row?.due_day ?? '',
+    phone: row?.phone ?? '',
+  };
+}
+
+/**
+ * When this balance is expected back. Pass '' to drop the date.
+ *
+ * Cleared automatically when a balance settles — see `settlePerson` callers —
+ * because a date on a balance of zero is a promise about nothing.
+ */
+export function setPersonDue(person: string, day: string): void {
+  setPersonFlags(person, { dueDay: day });
+}
+
+/** The number to reach them on, or '' to forget it. */
+export function setPersonPhone(person: string, phone: string): void {
+  setPersonFlags(person, { phone: phone.trim() });
+}
+
+/**
+ * Fold one person into another: same human, two spellings.
+ *
+ * Every entry moves, so the balance that comes out is the sum of both — which
+ * is the whole point, and why this is not the same as renaming. The flags of
+ * the person being KEPT win, except for a due date, where the earlier of the
+ * two is the honest answer: the soonest thing either name was expecting.
+ */
+export function mergePeople(from: string, into: string): void {
+  const source = from.trim();
+  const target = into.trim();
+  if (!source || !target || source === target) return;
+
+  const sourceFlags = getPersonFlags(source);
+  const targetFlags = getPersonFlags(target);
+  const updatedAt = nowIso();
+
+  db.withTransactionSync(() => {
+    const moved = db.getAllSync<{ id: string }>(
+      'SELECT id FROM ledger_entries WHERE person = ?',
+      source
+    );
+    db.runSync(
+      'UPDATE ledger_entries SET person = ?, updated_at = ? WHERE person = ?',
+      target, updatedAt, source
+    );
+    for (const row of moved) enqueue('ledger_entries', row.id, 'upsert', updatedAt);
+
+    dropPersonFlags(source, updatedAt);
+    setPersonFlags(target, {
+      pinned: targetFlags.pinned || sourceFlags.pinned,
+      archived: targetFlags.archived && sourceFlags.archived,
+      dueDay: [targetFlags.dueDay, sourceFlags.dueDay].filter(Boolean).sort()[0] ?? '',
+      phone: targetFlags.phone || sourceFlags.phone,
+    });
+  });
+  notifyDbChanged();
 }
 
 /** Wipe every flags row for a name, remembering the deletes for the server. */
@@ -1689,7 +2058,9 @@ export function getPeople(): PersonBalance[] {
        COUNT(e.id) AS entries,
        COALESCE(MAX(e.day), '') AS lastDay,
        COALESCE(MAX(f.pinned), 0) AS pinned,
-       COALESCE(MAX(f.archived), 0) AS archived
+       COALESCE(MAX(f.archived), 0) AS archived,
+       COALESCE(MAX(f.due_day), '') AS dueDay,
+       COALESCE(MAX(f.phone), '') AS phone
      FROM (
        SELECT person FROM ledger_entries
        UNION
@@ -1702,12 +2073,48 @@ export function getPeople(): PersonBalance[] {
   );
 }
 
-/** All entries with one person, newest first. */
+/**
+ * All entries with one person: newest day first, and inside a day whatever
+ * order was set by hand — falling back to newest-first.
+ */
 export function getPersonEntries(person: string): LedgerEntry[] {
   return db.getAllSync<LedgerEntry>(
-    'SELECT * FROM ledger_entries WHERE person = ? ORDER BY day DESC, created_at DESC',
+    `SELECT * FROM ledger_entries WHERE person = ?
+     ORDER BY day DESC, ${MANUAL_ORDER}`,
     person
   );
+}
+
+/**
+ * Fix one day's order by hand.
+ *
+ * `sort` is written for the WHOLE day at once, 1-based in display order. That
+ * is what keeps it meaningful — a number on one row says nothing on its own —
+ * and renumbering from 1 every time means the values can never drift into a
+ * tangle that needs rebalancing.
+ *
+ * A day nobody has touched keeps 0 on every row and reads newest-first, the
+ * order the app has always used. A row ADDED to a day that has been arranged
+ * also arrives at 0, so it appears at the top of that day, which is where a
+ * new entry belongs.
+ *
+ * `ids` is the day in its new display order. Ids that aren't actually in that
+ * person's day are ignored rather than trusted, so a stale list from a screen
+ * that has since re-queried can't write someone else's rows.
+ */
+export function reorderLedgerDay(person: string, day: string, ids: string[]): void {
+  const updatedAt = nowIso();
+  db.withTransactionSync(() => {
+    ids.forEach((id, index) => {
+      const result = db.runSync(
+        `UPDATE ledger_entries SET sort = ?, updated_at = ?
+         WHERE id = ? AND person = ? AND day = ?`,
+        index + 1, updatedAt, id, person, day
+      );
+      if (result.changes > 0) enqueue('ledger_entries', id, 'upsert', updatedAt);
+    });
+  });
+  notifyDbChanged();
 }
 
 /** Every ledger entry across all people, oldest first (for export). */
@@ -1915,10 +2322,13 @@ export function getLedgerTotals(options?: { includeArchived?: boolean }): Ledger
 export function upsertSharedBook(book: SharedBook): void {
   db.runSync(
     `INSERT OR REPLACE INTO shared_books
-       (id, name, owner_id, join_code, code_expires_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (id, name, owner_id, join_code, code_expires_at, expire_after,
+        pinned_message, vanish_state, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     book.id, book.name ?? '', book.owner_id, book.join_code ?? null,
-    book.code_expires_at ?? null, book.created_at, book.updated_at
+    book.code_expires_at ?? null, book.expire_after ?? 0,
+    book.pinned_message ?? null, book.vanish_state ?? '',
+    book.created_at, book.updated_at
   );
   notifyDbChanged();
 }
@@ -1936,6 +2346,7 @@ export function deleteSharedBookLocally(id: string): void {
   const stamp = nowIso();
   db.withTransactionSync(() => {
     db.runSync('DELETE FROM shared_entries WHERE book_id = ?', id);
+    db.runSync('DELETE FROM shared_reactions WHERE book_id = ?', id);
     db.runSync('DELETE FROM shared_messages WHERE book_id = ?', id);
     db.runSync('DELETE FROM shared_reads WHERE book_id = ?', id);
     db.runSync('DELETE FROM shared_book_members WHERE book_id = ?', id);
@@ -2039,10 +2450,10 @@ export function restoreSharedEntry(entry: SharedEntry): void {
   const updatedAt = nowIso();
   db.runSync(
     `INSERT OR REPLACE INTO shared_entries
-       (id, book_id, author_id, payer_id, amount, note, day, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, book_id, author_id, payer_id, amount, note, day, created_at, sort, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     entry.id, entry.book_id, entry.author_id, entry.payer_id, entry.amount,
-    entry.note, entry.day, entry.created_at, updatedAt
+    entry.note, entry.day, entry.created_at, entry.sort ?? 0, updatedAt
   );
   enqueue('shared_entries', entry.id, 'upsert', updatedAt);
   notifyDbChanged();
@@ -2052,12 +2463,50 @@ export function getSharedEntry(id: string): SharedEntry | null {
   return db.getFirstSync<SharedEntry>('SELECT * FROM shared_entries WHERE id = ?', id);
 }
 
-/** A book's entries, newest first. */
+/** A book's entries: newest day first, each day in its hand-set order. */
 export function getSharedEntries(bookId: string): SharedEntry[] {
   return db.getAllSync<SharedEntry>(
-    'SELECT * FROM shared_entries WHERE book_id = ? ORDER BY day DESC, created_at DESC',
+    `SELECT * FROM shared_entries WHERE book_id = ?
+     ORDER BY day DESC, ${MANUAL_ORDER}`,
     bookId
   );
+}
+
+/**
+ * Fix one day's order by hand in a shared book. See `reorderLedgerDay` for how
+ * `sort` works; the difference here is WHO IS ALLOWED TO SEND IT.
+ *
+ * A day usually mixes both members' entries, and dragging has to move all of
+ * them — but `shared_entries` lets only an author write their own row, which
+ * is the rule that stops either side quietly rewriting the record. It stays.
+ *
+ * So the order travels by two roads. Rows you authored go up the ordinary way,
+ * through the outbox, which means they survive being offline. The rest are
+ * written locally only and carried by `reorder_entries()`, a definer function
+ * either member may call that touches `sort` and nothing else — see
+ * `pushEntryOrder` in sync/shared.ts. Queueing the other member's rows instead
+ * would be worse than useless: the server would refuse each one, and a refused
+ * row sits in the outbox retrying for ever.
+ */
+export function reorderSharedDay(bookId: string, day: string, ids: string[]): void {
+  const updatedAt = nowIso();
+  db.withTransactionSync(() => {
+    ids.forEach((id, index) => {
+      const row = db.getFirstSync<{ author_id: string }>(
+        'SELECT author_id FROM shared_entries WHERE id = ? AND book_id = ? AND day = ?',
+        id, bookId, day
+      );
+      if (!row) return; // not in this day — ignore rather than trust
+      db.runSync(
+        'UPDATE shared_entries SET sort = ?, updated_at = ? WHERE id = ?',
+        index + 1, updatedAt, id
+      );
+      if (row.author_id === currentUserId) {
+        enqueue('shared_entries', id, 'upsert', updatedAt);
+      }
+    });
+  });
+  notifyDbChanged();
 }
 
 /**
@@ -2079,6 +2528,11 @@ export function getSharedBalance(bookId: string, userId: string): number {
 }
 
 /** Keep a shared book at the top of the people list (or stop doing so). */
+/** When this book is meant to be squared up by. '' drops the date. */
+export function setBookDue(bookId: string, day: string): void {
+  setPersonFlags(bookFlagKey(bookId), { dueDay: day });
+}
+
 export function setBookPinned(bookId: string, pinned: boolean): void {
   setPersonFlags(bookFlagKey(bookId), { pinned });
 }
@@ -2156,6 +2610,7 @@ export function getSharedBookSummaries(userId: string): SharedBookSummary[] {
       lastDay: book.lastDay ?? '',
       pinned: flags.pinned ? 1 : 0,
       archived: flags.archived ? 1 : 0,
+      dueDay: flags.dueDay,
       pending: !other,
       unread: unread[book.id] ?? 0,
     };
@@ -2187,7 +2642,20 @@ export type SharedMessageInput = {
   body: string;
   /** The entry this message is about, when it is about one. */
   entryId?: string | null;
+  /** The message this one answers, when it answers one. */
+  replyTo?: string | null;
 };
+
+/**
+ * A SQL fragment that excludes messages which have reached their expiry.
+ *
+ * Every read of the thread uses it, not just the sweep in
+ * `purgeExpiredMessages`. The sweep is what eventually removes the rows, but
+ * it runs on a timer and on focus — and a pull can briefly bring an expired
+ * row back from a server copy the sender's device has not managed to delete
+ * yet. Filtering at read time means neither gap is ever visible.
+ */
+const LIVE_ONLY = "(expires_at IS NULL OR expires_at > ?)";
 
 /**
  * Send a message. `sender_id` is always you — the server enforces that, and
@@ -2199,9 +2667,22 @@ export function addSharedMessage(input: SharedMessageInput): string {
   const updatedAt = nowIso();
   db.runSync(
     `INSERT INTO shared_messages
-       (id, book_id, sender_id, body, entry_id, deleted_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
-    id, input.bookId, currentUserId ?? '', input.body, input.entryId ?? null, updatedAt, updatedAt
+       (id, book_id, sender_id, body, entry_id, reply_to, expires_at, vanish_at,
+        edited_at, deleted_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+    id,
+    input.bookId,
+    currentUserId ?? '',
+    input.body,
+    input.entryId ?? null,
+    input.replyTo ?? null,
+    expiryFor(input.bookId, updatedAt),
+    // Stamped from the book's session at the moment of sending, like the
+    // expiry beside it: what a message promised when it was sent does not
+    // change because the setting did afterwards.
+    readVanish(getSharedBook(input.bookId)?.vanish_state).mode === 'on' ? updatedAt : null,
+    updatedAt,
+    updatedAt
   );
   enqueue('shared_messages', id, 'upsert', updatedAt);
   return id;
@@ -2210,9 +2691,10 @@ export function addSharedMessage(input: SharedMessageInput): string {
 /**
  * Delete your own message for everyone.
  *
- * An UPDATE, not a delete. The body and any quoted entry are wiped — on this
- * device, and on the server and theirs once it syncs, so the content really is
- * gone — but the row stays, carrying `deleted_at`. That is what lets both
+ * An UPDATE, not a delete. The body, any quoted entry and the pointer to the
+ * message it answered are wiped — on this device, and on the server and theirs
+ * once it syncs, so the content really is gone — but the row stays, carrying
+ * `deleted_at`. That is what lets both
  * threads show a line where the message was instead of quietly closing the gap
  * as though nothing had ever been said.
  *
@@ -2222,11 +2704,34 @@ export function addSharedMessage(input: SharedMessageInput): string {
 export function deleteSharedMessage(id: string): void {
   const updatedAt = nowIso();
   db.runSync(
-    `UPDATE shared_messages SET body = '', entry_id = NULL, deleted_at = ?, updated_at = ?
+    `UPDATE shared_messages
+       SET body = '', entry_id = NULL, reply_to = NULL, deleted_at = ?, updated_at = ?
      WHERE id = ?`,
     updatedAt, updatedAt, id
   );
   enqueue('shared_messages', id, 'upsert', updatedAt);
+}
+
+/**
+ * Change the words of a message you sent.
+ *
+ * Only the body moves. `created_at` stays where it was, so the message keeps
+ * its place in the conversation rather than jumping to the end — an edit is a
+ * correction to something already said, not a new thing to say.
+ *
+ * The server's own policy allows this for the sender only, so a bad actor
+ * editing their way into someone else's bubble is refused there as well as
+ * being impossible to ask for here.
+ */
+export function editSharedMessage(id: string, body: string): void {
+  const updatedAt = nowIso();
+  db.runSync(
+    `UPDATE shared_messages SET body = ?, edited_at = ?, updated_at = ?
+     WHERE id = ? AND sender_id = ? AND deleted_at IS NULL`,
+    body, updatedAt, updatedAt, id, currentUserId ?? ''
+  );
+  enqueue('shared_messages', id, 'upsert', updatedAt);
+  notifyDbChanged();
 }
 
 export function getSharedMessage(id: string): SharedMessage | null {
@@ -2236,17 +2741,233 @@ export function getSharedMessage(id: string): SharedMessage | null {
 /** A book's thread, oldest first — the order a conversation is read in. */
 export function getSharedMessages(bookId: string): SharedMessage[] {
   return db.getAllSync<SharedMessage>(
-    'SELECT * FROM shared_messages WHERE book_id = ? ORDER BY created_at ASC, id ASC',
-    bookId
+    `SELECT * FROM shared_messages WHERE book_id = ? AND ${LIVE_ONLY}
+     ORDER BY created_at ASC, id ASC`,
+    bookId, nowIso()
   );
 }
 
 /** The newest message in a book, for a one-line preview. */
 export function getLastSharedMessage(bookId: string): SharedMessage | null {
   return db.getFirstSync<SharedMessage>(
-    'SELECT * FROM shared_messages WHERE book_id = ? ORDER BY created_at DESC, id DESC LIMIT 1',
+    `SELECT * FROM shared_messages WHERE book_id = ? AND ${LIVE_ONLY}
+     ORDER BY created_at DESC, id DESC LIMIT 1`,
+    bookId, nowIso()
+  );
+}
+
+// --- Disappearing messages --------------------------------------------------
+
+/** How long messages in this book live, in seconds. 0 means forever. */
+export function getBookExpiry(bookId: string): number {
+  const row = db.getFirstSync<{ expire_after: number }>(
+    'SELECT expire_after FROM shared_books WHERE id = ?',
     bookId
   );
+  return row?.expire_after ?? 0;
+}
+
+/**
+ * Mirror a setting the server has already accepted.
+ *
+ * Local-only, like `renameSharedBookLocally`: books are not pushed from the
+ * outbox, so sync/shared.ts writes to Supabase first and calls this after. Had
+ * it gone the other way, a failed write would leave a local `updated_at`
+ * newer than the server's and last-write-wins would keep the wrong setting
+ * forever — which for a promise about deleting messages is the worst way to
+ * be wrong.
+ */
+export function setBookExpiryLocally(bookId: string, seconds: number): void {
+  db.runSync('UPDATE shared_books SET expire_after = ? WHERE id = ?', seconds, bookId);
+  notifyDbChanged();
+}
+
+/** The stamp a message sent now should carry, or null when the book is off. */
+function expiryFor(bookId: string, from: string): string | null {
+  const seconds = getBookExpiry(bookId);
+  if (seconds <= 0) return null;
+  return new Date(new Date(from).getTime() + seconds * 1000).toISOString();
+}
+
+/**
+ * Drop every message that has reached its expiry, everywhere.
+ *
+ * Across all books in one pass rather than per book: the sweep runs on a timer
+ * and on app focus, and a query per book is what turns a background tick into
+ * a stutter.
+ *
+ * Only the SENDER queues the server-side delete, because only the sender is
+ * allowed to — that is what `message_sender_write` says. The other device
+ * removes its own copy and leaves the row to the person who wrote it, which
+ * is also the honest division: you can promise to delete what you said, not
+ * what someone else did.
+ *
+ * Returns how many went, so a caller can skip a pointless re-render.
+ */
+export function purgeExpiredMessages(userId: string): number {
+  const now = nowIso();
+  const due = db.getAllSync<{ id: string; sender_id: string }>(
+    'SELECT id, sender_id FROM shared_messages WHERE expires_at IS NOT NULL AND expires_at <= ?',
+    now
+  );
+  if (due.length === 0) return 0;
+
+  db.withTransactionSync(() => {
+    for (const row of due) {
+      if (row.sender_id === userId) enqueue('shared_messages', row.id, 'delete', now);
+      db.runSync('DELETE FROM shared_reactions WHERE message_id = ?', row.id);
+      db.runSync('DELETE FROM shared_messages WHERE id = ?', row.id);
+    }
+  });
+  notifyDbChanged();
+  return due.length;
+}
+
+// --- The pinned message -----------------------------------------------------
+
+/** Mirror a pin the server has already accepted. See setBookExpiryLocally. */
+export function setBookPinnedLocally(bookId: string, messageId: string | null): void {
+  db.runSync('UPDATE shared_books SET pinned_message = ? WHERE id = ?', messageId, bookId);
+  notifyDbChanged();
+}
+
+// --- Vanishing sessions -----------------------------------------------------
+
+/** Mirror a session change the server has already accepted. */
+export function setBookVanishLocally(bookId: string, state: string): void {
+  db.runSync('UPDATE shared_books SET vanish_state = ? WHERE id = ?', state, bookId);
+  notifyDbChanged();
+}
+
+/**
+ * Clear what was said in a vanishing session — on leaving the thread, or on
+ * the session ending.
+ *
+ * Both devices do this to their own copy, independently. There is no handshake
+ * and no "they have seen it" to wait for: you were in the room, you have read
+ * it, and walking out is what ends it. The SENDER additionally queues the
+ * server-side delete, because the server only lets the sender remove a row.
+ *
+ * Your own messages go too. A vanishing conversation where one side keeps a
+ * transcript of half of it is not one, and the other person agreed to the
+ * former rather than the latter.
+ *
+ * Returns how many went, so a caller can skip a pointless re-render.
+ */
+export function purgeVanishedMessages(bookId: string, userId: string): number {
+  const now = nowIso();
+  const due = db.getAllSync<{ id: string; sender_id: string }>(
+    'SELECT id, sender_id FROM shared_messages WHERE book_id = ? AND vanish_at IS NOT NULL',
+    bookId
+  );
+  if (due.length === 0) return 0;
+
+  db.withTransactionSync(() => {
+    for (const row of due) {
+      if (row.sender_id === userId) enqueue('shared_messages', row.id, 'delete', now);
+      db.runSync('DELETE FROM shared_reactions WHERE message_id = ?', row.id);
+      db.runSync('DELETE FROM shared_messages WHERE id = ?', row.id);
+    }
+    // A pin pointing at something that no longer exists is just a blank bar.
+    db.runSync(
+      `UPDATE shared_books SET pinned_message = NULL
+       WHERE id = ? AND pinned_message NOT IN (SELECT id FROM shared_messages)`,
+      bookId
+    );
+  });
+  notifyDbChanged();
+  return due.length;
+}
+
+/**
+ * Empty a thread on THIS device.
+ *
+ * Local only, and the wording in the UI has to say so: the other person keeps
+ * their copy, and nothing is deleted from the server. What makes it stick is
+ * the pull cursor — a pull only asks for rows changed since it, so messages
+ * that are already old do not come back. One that somebody later edits or
+ * reacts to will, which is the honest limit of a local clear.
+ *
+ * Reactions go with them, and the pin, which would otherwise point at a row
+ * that is no longer here.
+ */
+export function clearSharedChatLocally(bookId: string): void {
+  db.withTransactionSync(() => {
+    db.runSync('DELETE FROM shared_reactions WHERE book_id = ?', bookId);
+    db.runSync('DELETE FROM shared_messages WHERE book_id = ?', bookId);
+    db.runSync('UPDATE shared_books SET pinned_message = NULL WHERE id = ?', bookId);
+  });
+  notifyDbChanged();
+}
+
+/**
+ * Put the thread back to unread, so the badge comes back.
+ *
+ * The one place a read marker is allowed to move BACKWARDS, which is why it
+ * writes the row directly rather than going through `setReadMarker` — that
+ * one takes a MAX precisely so a stale device can never drag the marker back
+ * and resurrect read messages. Here that is exactly the intent, and it is the
+ * user asking for it.
+ *
+ * It leaves the marker just before the newest message, so the book shows one
+ * unread rather than the whole history.
+ */
+export function markBookUnread(bookId: string, userId: string): boolean {
+  const newest = db.getFirstSync<{ created_at: string }>(
+    `SELECT created_at FROM shared_messages
+     WHERE book_id = ? AND sender_id <> ? AND deleted_at IS NULL
+     ORDER BY created_at DESC LIMIT 1`,
+    bookId, userId
+  );
+  if (!newest) return false; // nothing of theirs to be unread about
+
+  // One tick before it, so the newest message counts as unseen and nothing
+  // older does.
+  const upTo = new Date(new Date(newest.created_at).getTime() - 1).toISOString();
+  const updatedAt = nowIso();
+  const id = `${bookId}:${userId}`;
+  db.runSync(
+    `INSERT INTO shared_reads (id, book_id, user_id, delivered_at, last_read_at, updated_at)
+     VALUES (?, ?, ?, '', ?, ?)
+     ON CONFLICT(id) DO UPDATE SET last_read_at = excluded.last_read_at,
+                                   updated_at = excluded.updated_at`,
+    id, bookId, userId, upTo, updatedAt
+  );
+  enqueue('shared_reads', id, 'upsert', updatedAt);
+  notifyDbChanged();
+  return true;
+}
+
+// --- Reactions --------------------------------------------------------------
+
+/** Every reaction in a book, for the thread to group by message. */
+export function getSharedReactions(bookId: string): SharedReaction[] {
+  return db.getAllSync<SharedReaction>(
+    "SELECT * FROM shared_reactions WHERE book_id = ? AND emoji <> '' ORDER BY created_at ASC",
+    bookId
+  );
+}
+
+/**
+ * React to a message, change the reaction, or take it back with ''.
+ *
+ * The id is derived from the message and the reactor rather than random, so
+ * reacting twice REPLACES instead of stacking, and the same person on two
+ * devices converges on one row instead of racing to create two.
+ */
+export function setSharedReaction(bookId: string, messageId: string, emoji: string): void {
+  const me = currentUserId ?? '';
+  const id = `${messageId}:${me}`;
+  const updatedAt = nowIso();
+  db.runSync(
+    `INSERT INTO shared_reactions
+       (id, book_id, message_id, user_id, emoji, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET emoji = excluded.emoji, updated_at = excluded.updated_at`,
+    id, bookId, messageId, me, emoji, updatedAt, updatedAt
+  );
+  enqueue('shared_reactions', id, 'upsert', updatedAt);
+  notifyDbChanged();
 }
 
 /**
@@ -2312,8 +3033,9 @@ function setReadMarker(
  */
 export function markBookRead(bookId: string, userId: string): boolean {
   const newest = db.getFirstSync<{ created_at: string }>(
-    'SELECT created_at FROM shared_messages WHERE book_id = ? ORDER BY created_at DESC LIMIT 1',
-    bookId
+    `SELECT created_at FROM shared_messages WHERE book_id = ? AND ${LIVE_ONLY}
+     ORDER BY created_at DESC LIMIT 1`,
+    bookId, nowIso()
   );
   const upTo = newest?.created_at;
   if (!upTo) return false; // nothing has been said yet
@@ -2347,8 +3069,9 @@ export function markBooksDelivered(userId: string): void {
 export function getUnreadCount(bookId: string, userId: string): number {
   const row = db.getFirstSync<{ n: number }>(
     `SELECT COUNT(*) AS n FROM shared_messages
-     WHERE book_id = ? AND sender_id <> ? AND deleted_at IS NULL AND created_at > ?`,
-    bookId, userId, getBookReadState(bookId, userId).read
+     WHERE book_id = ? AND sender_id <> ? AND deleted_at IS NULL AND created_at > ?
+       AND ${LIVE_ONLY}`,
+    bookId, userId, getBookReadState(bookId, userId).read, nowIso()
   );
   return row?.n ?? 0;
 }
@@ -2366,8 +3089,9 @@ export function getUnreadCounts(userId: string): Record<string, number> {
      LEFT JOIN shared_reads r ON r.book_id = m.book_id AND r.user_id = ?
      WHERE m.sender_id <> ? AND m.deleted_at IS NULL
        AND m.created_at > COALESCE(r.last_read_at, '')
+       AND (m.expires_at IS NULL OR m.expires_at > ?)
      GROUP BY m.book_id`,
-    userId, userId
+    userId, userId, nowIso()
   );
   const counts: Record<string, number> = {};
   for (const row of rows) counts[row.book_id] = row.n;
@@ -2543,7 +3267,11 @@ export function applyRemoteRows(table: AnyTable, rows: RemoteRow[]): void {
         continue;
       }
       if (!remoteIsNewer(table, row.id, row.updated_at)) continue;
-      const values = cols.map((c) => row[c]);
+      // `undefined` is what a column the SERVER doesn't have yet looks like
+      // after an app update lands before its SQL does. SQLite cannot bind it,
+      // so without this the whole pull throws and every table stops syncing —
+      // over a column nobody is using yet.
+      const values = cols.map((c) => row[c] ?? null);
       // INSERT OR REPLACE (not ON CONFLICT id) so a remote row also wins over a
       // local row that clashes on a secondary UNIQUE key — e.g. the same
       // category name created on two devices before they synced.

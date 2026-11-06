@@ -20,6 +20,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
+import { isBookMuted } from '@/lib/muted-books';
+
 const ENABLED_KEY = 'spendly.reminder.enabled';
 const HOUR_KEY = 'spendly.reminder.hour';
 const MINUTE_KEY = 'spendly.reminder.minute';
@@ -97,6 +99,10 @@ Notifications.setNotificationHandler({
     const mute =
       data?.type === 'chat' &&
       ((!!data.bookId && data.bookId === activeChatBook) ||
+        // Silenced on this device. Checked here rather than at send time
+        // because the server has no business knowing which of someone's
+        // phones they have chosen to keep quiet.
+        (!!data.bookId && isBookMuted(data.bookId)) ||
         (!!data.messageId && presented.has(data.messageId)));
 
     return {

@@ -3,9 +3,7 @@ import { Image } from 'expo-image';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -27,6 +25,7 @@ import {
 import { Segmented } from '@/components/segmented';
 import { ActionSheet } from '@/components/action-sheet';
 import { confirm, notify } from '@/lib/confirm';
+import { KeyboardAvoider } from '@/components/keyboard-avoider';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
@@ -330,12 +329,13 @@ export default function EntryScreen() {
   return (
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ title }} />
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoider style={styles.flex}>
         <ScrollView
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
+          // A decimal pad has no Done key on Android, so a drag is the
+          // only gesture left that can put the keyboard away.
+          keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}>
           <Segmented
             value={type}
@@ -421,7 +421,7 @@ export default function EntryScreen() {
 
           <SafeAreaView edges={['bottom']} />
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAvoider>
 
       {/* Full-screen receipt viewer */}
       <Modal
