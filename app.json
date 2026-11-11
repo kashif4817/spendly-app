@@ -3,7 +3,7 @@
     "name": "Spendly",
     "slug": "my-app",
     "owner": "codeflyx",
-    "version": "1.1.1",
+    "version": "1.1.2",
     "orientation": "portrait",
     "icon": "./assets/images/spendly-icon.png",
     "scheme": "myapp",
@@ -21,6 +21,7 @@
     "android": {
       "package": "com.codeflyx.expensetracker",
       "googleServicesFile": "./google-services.json",
+      "permissions": ["android.permission.REQUEST_INSTALL_PACKAGES"],
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/images/spendly-adaptive.png"
@@ -67,7 +68,15 @@
           "color": "#6A45F5"
         }
       ],
-      "@react-native-google-signin/google-signin"
+      "@react-native-google-signin/google-signin",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "buildArchs": ["armeabi-v7a", "arm64-v8a"]
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

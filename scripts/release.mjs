@@ -17,6 +17,7 @@
 
 import { Buffer } from 'node:buffer';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -119,7 +120,15 @@ if (!response.ok) fail(`Download failed (${response.status}).`);
 const dir = path.join(os.tmpdir(), 'spendly-release');
 mkdirSync(dir, { recursive: true });
 const apkPath = path.join(dir, apk);
-writeFileSync(apkPath, Buffer.from(await response.arrayBuffer()));
+const apkBytes = Buffer.from(await response.arrayBuffer());
+writeFileSync(apkPath, apkBytes);
+
+// The app's update button checks its download against this before opening the
+// installer (src/lib/apk-update.ts), so a file damaged in transit is fetched
+// again instead of being refused by Android as "App not installed". MD5
+// because a phone can hash a file natively; the APK's own signature is what
+// guards against tampering.
+const md5 = createHash('md5').update(apkBytes).digest('hex');
 
 // 5. Publish. Notes go through a file so quotes and spaces survive every shell.
 const buildNumber = build.appBuildVersion ? ` (build ${build.appBuildVersion})` : '';
@@ -128,6 +137,9 @@ const notes = [
   '',
   `Spendly ${version}${buildNumber}.`,
   'Download Spendly.apk, open it and tap Update. It installs over the app you have and keeps your data.',
+  '',
+  // Hidden on GitHub and stripped by the app; read by lib/app-release.ts.
+  `<!-- md5:${md5} -->`,
 ].join('\n');
 const notesPath = path.join(dir, 'notes.md');
 writeFileSync(notesPath, notes);

@@ -20,7 +20,22 @@ export type AppRelease = {
   notes: string;
   /** The APK itself. */
   downloadUrl: string;
+  /** Its exact size in bytes, from GitHub — a download of any other size is incomplete. */
+  size?: number;
+  /**
+   * Its MD5, published by scripts/release.mjs in a hidden comment in the
+   * release notes. With it the app can catch a download that is the RIGHT
+   * size but damaged inside — what a phone's browser once produced: a 125 MB
+   * file with a 10 MB run of zeros in the middle, which Android then refused
+   * as "App not installed". MD5 because the phone can hash a file natively;
+   * it's a check against damage in transit, not against tampering, which the
+   * APK's own signature already covers.
+   */
+  md5?: string;
 };
+
+/** `<!-- md5:… -->` in the release notes, written by scripts/release.mjs. */
+const MD5_MARK = /<!--\s*md5:([0-9a-f]{32})\s*-->/i;
 
 type ReleaseConfig = { repo?: string; apk?: string };
 
@@ -63,7 +78,9 @@ function setLatest(next: AppRelease | null): void {
   const same =
     next?.version === latest?.version &&
     next?.downloadUrl === latest?.downloadUrl &&
-    next?.notes === latest?.notes;
+    next?.notes === latest?.notes &&
+    next?.size === latest?.size &&
+    next?.md5 === latest?.md5;
   if (same) return;
   latest = next;
   emit();
@@ -121,17 +138,21 @@ export async function checkForRelease(): Promise<void> {
       const body = (await res.json()) as {
         tag_name?: string;
         body?: string | null;
-        assets?: { name: string; browser_download_url: string }[];
+        assets?: { name: string; browser_download_url: string; size?: number }[];
       };
       const version = (body.tag_name ?? '').replace(/^v/i, '');
       if (version) {
         const asset = body.assets?.find((a) => a.name === config.apk);
+        const raw = body.body ?? '';
         setLatest({
           version,
-          notes: (body.body ?? '').trim(),
+          // Hidden comments are for the app, not for people.
+          notes: raw.replace(/<!--[\s\S]*?-->/g, '').trim(),
           downloadUrl:
             asset?.browser_download_url ??
             `https://github.com/${config.repo}/releases/latest/download/${config.apk}`,
+          size: asset?.size && asset.size > 0 ? asset.size : undefined,
+          md5: MD5_MARK.exec(raw)?.[1]?.toLowerCase(),
         });
       }
     }

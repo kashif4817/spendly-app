@@ -60,6 +60,27 @@ installed. The answer is cached, so it keeps showing offline. The repo and APK
 name come from `expo.extra.release` in `app.json`, the same place the release
 script reads them from.
 
+**Download** no longer hands the link to the browser. From 1.1.2 the app
+downloads the APK itself (`src/lib/apk-update.ts`), checks it is exactly the size
+GitHub reports and has the MD5 the release publishes, fetches it again if not,
+and only then opens Android's installer. A phone's browser once delivered a
+125 MB APK with a 10 MB run of zeros in the middle; Android refused it with a
+bare "App not installed". The browser is still offered if the in-app download
+can't finish.
+
+The MD5 comes from `npm run release`, which appends it to the release notes as a
+hidden `<!-- md5:… -->` comment (the app strips it before showing the notes).
+**Publish releases with the script**, not by hand: a release without that line
+is still checked for size, but not for damage inside the file.
+
+### What the APK contains
+
+Built for ARM phones only (`expo-build-properties` → `buildArchs`:
+`armeabi-v7a`, `arm64-v8a`), about 70 MB instead of 125 MB. The x86 builds it
+used to carry run only on emulators and Chromebooks. 32-bit ARM stays in on
+purpose: many budget "Android Go" phones run 32-bit Android even on 64-bit chips,
+and a 64-bit-only APK would refuse to install on them.
+
 ## Push a JS update
 
 ```bash
