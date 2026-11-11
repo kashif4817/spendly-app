@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MoneyColors } from '@/constants/app';
-import { Radius, Spacing } from '@/constants/theme';
+import { Radius, Scrim, Spacing } from '@/constants/theme';
 import { useAppRelease } from '@/hooks/use-app-release';
 import { useTheme } from '@/hooks/use-theme';
 import { INSTALLED_VERSION } from '@/lib/app-release';
@@ -60,7 +60,14 @@ export function AppUpdateButton() {
         <Pressable style={styles.backdrop} onPress={() => setOpen(false)} accessibilityLabel="Dismiss">
           {/* Swallows taps so pressing the sheet itself doesn't close it. */}
           <Pressable onPress={() => {}}>
-            <ThemedView style={[styles.sheet, { paddingBottom: insets.bottom + Spacing.three }]}>
+            {/* The overlay pane every other sheet uses. A plain ThemedView is
+                transparent under the Aurora look, so this sheet used to have no
+                surface at all and the dashboard showed straight through it. */}
+            <View
+              style={[
+                styles.sheet,
+                { ...theme.glassOverlay, paddingBottom: insets.bottom + Spacing.three },
+              ]}>
               <View style={[styles.grabber, { backgroundColor: theme.backgroundSelected }]} />
 
               <View style={styles.head}>
@@ -116,7 +123,7 @@ export function AppUpdateButton() {
                   </ThemedText>
                 </Pressable>
               </View>
-            </ThemedView>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>
@@ -144,12 +151,13 @@ const styles = StyleSheet.create({
   },
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: Scrim,
     justifyContent: 'flex-end',
   },
   sheet: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderTopLeftRadius: Radius.large,
+    borderTopRightRadius: Radius.large,
+    borderBottomWidth: 0,
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.two,
     gap: Spacing.three,
