@@ -30,7 +30,10 @@ export default function RootLayout() {
   const theme = useTheme();
 
   useEffect(() => {
-    // The native splash (Spendly mark on white / navy-black) shows until the app is ready.
+    // Safe to drop the native splash at once: <AnimatedSplash> mounts in this
+    // same commit and its first frame is an exact copy of it, so the hand-off
+    // has no seam. The overlay then carries the intro and holds until the
+    // session is restored.
     SplashScreen.hideAsync();
   }, []);
 
@@ -116,7 +119,7 @@ export default function RootLayout() {
                       <Stack.Screen name="profile" options={{ title: 'Profile' }} />
                       <Stack.Screen name="security" options={{ presentation: 'modal', title: 'Security' }} />
                       <Stack.Screen name="settings-appearance" options={{ title: 'Appearance' }} />
-                      <Stack.Screen name="settings-reminders" options={{ title: 'Reminders' }} />
+                      <Stack.Screen name="settings-reminders" options={{ title: 'Notifications' }} />
                       <Stack.Screen name="settings-data" options={{ title: 'Your data' }} />
                       <Stack.Screen name="settings-about" options={{ title: 'About' }} />
                       <Stack.Screen name="shared-new" options={{ presentation: 'modal', title: 'Shared book' }} />

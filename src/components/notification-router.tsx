@@ -4,6 +4,28 @@ import { useEffect, useRef } from 'react';
 
 import { useSync } from '@/sync/provider';
 
+type NotificationData = { type?: string; bookId?: string };
+
+/**
+ * Where each kind of notification leads:
+ *
+ *   chat     — a message, a balance reminder or a reaction → that book's chat
+ *   book     — an entry added, edited or deleted, or someone joining → the
+ *              book itself, where the change is (a deleted entry has nowhere
+ *              else to be shown)
+ *   reminder — the daily nudge to log spending → straight to "Add expense"
+ *
+ * Anything else (the test notification) just opens the app.
+ */
+function destinationOf(data: NotificationData | undefined): Href | null {
+  if (data?.type === 'reminder') return '/entry' as Href;
+  if (!data?.bookId) return null;
+  const book = encodeURIComponent(data.bookId);
+  if (data.type === 'chat') return `/shared-chat?book=${book}` as Href;
+  if (data.type === 'book') return `/shared-book?id=${book}` as Href;
+  return null;
+}
+
 /**
  * Takes the user where a tapped notification was about.
  *
@@ -34,13 +56,13 @@ export function NotificationRouter() {
     const id = response.notification.request.identifier;
     if (handled.current === id) return;
 
-    const data = response.notification.request.content.data as
-      | { type?: string; bookId?: string }
-      | undefined;
-    if (data?.type !== 'chat' || !data.bookId) return;
+    const target = destinationOf(
+      response.notification.request.content.data as NotificationData | undefined
+    );
+    if (!target) return;
 
     handled.current = id;
-    router.push(`/shared-chat?book=${encodeURIComponent(data.bookId)}` as Href);
+    router.push(target);
   }, [response, ready, email, router]);
 
   return null;

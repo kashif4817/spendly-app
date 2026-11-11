@@ -3,7 +3,7 @@
     "name": "Spendly",
     "slug": "my-app",
     "owner": "codeflyx",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "orientation": "portrait",
     "icon": "./assets/images/spendly-icon.png",
     "scheme": "myapp",
@@ -20,6 +20,7 @@
     "ios": {},
     "android": {
       "package": "com.codeflyx.expensetracker",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/images/spendly-adaptive.png"
@@ -35,11 +36,11 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#FFFFFF",
+          "backgroundColor": "#E8ECFD",
           "image": "./assets/images/spendly-mark.png",
           "imageWidth": 180,
           "dark": {
-            "backgroundColor": "#060B16",
+            "backgroundColor": "#09071A",
             "image": "./assets/images/spendly-mark-light.png"
           }
         }

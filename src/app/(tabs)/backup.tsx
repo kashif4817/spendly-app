@@ -198,8 +198,8 @@ export default function SettingsScreen() {
             <GlassDivider />
             <MenuRow
               icon="notifications-none"
-              label="Reminders"
-              hint="A daily nudge to log spending"
+              label="Notifications"
+              hint="Daily reminder, chat and shared books"
               onPress={() => router.push('/settings-reminders' as Href)}
             />
             <GlassDivider />

@@ -30,6 +30,11 @@ yarn-error.*
 .DS_Store
 *.pem
 
+# Firebase service-account keys (private — they live in EAS credentials only).
+# google-services.json is NOT one of these: it holds public identifiers and
+# is committed so EAS Build can bake it into the APK.
+*firebase-adminsdk*.json
+
 # local env files
 .env*.local
 

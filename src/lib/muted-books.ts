@@ -1,10 +1,17 @@
 /**
- * Books whose chat should stay quiet on this device.
+ * Shared books whose notifications should stay quiet on this device — chat,
+ * reminders, reactions, entries and joins alike.
  *
  * WHY DEVICE-LOCAL: muting is a statement about where you are, not about the
  * conversation. Syncing it would mean one person silencing the other's phone,
  * and it would also tell them you had done it — neither of which is what
  * anyone means by "mute".
+ *
+ * It IS mirrored onto this install's own push_tokens row (lib/push.ts). The
+ * server sends the pushes, and with the app closed Android shows them without
+ * asking the app — so a mute the server couldn't see used to stop working the
+ * moment the app was swiped away. That row is per-install and own-row only,
+ * so the reasons above still hold.
  *
  * Read synchronously from a module store so the notification handler, which
  * must answer in the same tick, never has to await storage.

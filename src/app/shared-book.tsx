@@ -1,5 +1,5 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { Stack, useLocalSearchParams, useRouter, type Href } from 'expo-router';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -46,11 +46,14 @@ import {
   setBookPinned,
 } from '@/db';
 import { useQuery } from '@/db/hooks';
+import { useBookMuted } from '@/hooks/use-book-muted';
 import { useTheme } from '@/hooks/use-theme';
 import { formatTime, groupByDay } from '@/lib/date';
 import { confirm, notify } from '@/lib/confirm';
 import { bookScope } from '@/lib/balance-privacy';
 import { formatMoney } from '@/lib/money';
+import { setBookMuted } from '@/lib/muted-books';
+import { setActiveBook } from '@/lib/notifications';
 import { shareBookBalance } from '@/lib/share-balance';
 import {
   leaveSharedBook,
@@ -97,6 +100,16 @@ export default function SharedBookScreen() {
   const bookId = params.id ?? '';
   // Keyed by id, not name: a book can be renamed and stay the same book.
   const scope = bookScope(bookId);
+  const muted = useBookMuted(bookId);
+
+  // While this book is on screen, the other member's changes to it show up
+  // right here — so the notification handler keeps their banners quiet.
+  useFocusEffect(
+    useCallback(() => {
+      setActiveBook(bookId);
+      return () => setActiveBook(null);
+    }, [bookId])
+  );
 
   const me = getCurrentUserId() ?? '';
   const book = useQuery(() => getSharedBook(bookId), [bookId]);
@@ -595,6 +608,27 @@ export default function SharedBookScreen() {
             label: 'Share balance',
             icon: 'share',
             onPress: () => void shareBookBalance(bookId),
+          },
+          {
+            // Opens the chat with the reminder drafted, so the words can be
+            // softened before it goes; it arrives on their phone as
+            // "… sent a balance reminder".
+            label: 'Send a balance reminder',
+            icon: 'notifications-active',
+            onPress: () =>
+              settled
+                ? notify('Nothing outstanding', 'This book is already settled up.')
+                : router.push(
+                    `/shared-chat?book=${encodeURIComponent(bookId)}&remind=1` as Href
+                  ),
+          },
+          {
+            // Everything from this book on this phone: chat, reminders,
+            // reactions, entries and joins. The per-kind switches live in
+            // Settings → Notifications.
+            label: muted ? 'Unmute notifications' : 'Mute notifications',
+            icon: muted ? 'notifications' : 'notifications-off',
+            onPress: () => setBookMuted(bookId, !muted),
           },
           {
             label: flags.pinned ? 'Unpin from top' : 'Pin to top',

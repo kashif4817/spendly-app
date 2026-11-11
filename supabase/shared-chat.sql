@@ -149,6 +149,11 @@ alter table public.shared_books add column if not exists expire_after integer no
 alter table public.shared_messages add column if not exists edited_at text;
 alter table public.shared_messages add column if not exists vanish_at text;
 
+-- What kind of message this is: '' for ordinary chat, 'reminder' for a balance
+-- reminder. Nullable on purpose — a row pulled down before this column existed
+-- comes back to the server as null, and that must not be refused.
+alter table public.shared_messages add column if not exists kind text default '';
+
 -- The one message held at the top of this book's thread, or null.
 --
 -- On the BOOK rather than on the message, because pinning what the OTHER
@@ -287,119 +292,11 @@ grant update (name, expire_after, pinned_message, vanish_state) on public.shared
 
 -- 5) Push notifications ------------------------------------------------------
 --
--- A message only reaches the other phone through Realtime while that phone is
--- awake with the app open. The rest of the time — screen off, app swiped away
--- — the only thing that can reach it is a push, and the only moment we know a
--- message exists is the insert that created it. So the insert sends it.
---
--- pg_net posts to Expo's push service and does not wait for the reply, so a
--- slow or unreachable push service can never slow down (or fail) the write
--- that a user is waiting on. The whole call is wrapped in an exception block
--- for the same reason: notifications are a courtesy, the message is the data.
-
-create extension if not exists pg_net with schema extensions;
-
-/**
- * Tell every OTHER member of the book that a message arrived.
- *
- * SECURITY DEFINER because it reads `push_tokens` and `profiles` rows that
- * belong to the recipient, not to the sender. It never returns them — the
- * tokens go straight to Expo — and the search_path is fixed so a caller can't
- * shadow the tables it reads.
- */
-create or replace function public.notify_shared_message()
-returns trigger
-language plpgsql
-security definer
-set search_path = public, extensions
-as $$
-declare
-  v_sender  text;
-  v_book    text;
-  v_tokens  text[];
-  v_preview text;
-begin
-  if new.deleted or new.deleted_at is not null then return new; end if;
-
-  select array_agg(t.id) into v_tokens
-  from public.push_tokens t
-  join public.shared_book_members m on m.user_id = t.user_id
-  where m.book_id = new.book_id
-    and m.user_id <> new.sender_id
-    and not m.deleted
-    and not t.deleted;
-
-  -- Nobody to tell: a book with one member, or a member who has never granted
-  -- notification permission.
-  if v_tokens is null or array_length(v_tokens, 1) = 0 then
-    return new;
-  end if;
-
-  select coalesce(
-           nullif(btrim(p.name), ''),
-           nullif(split_part(coalesce(p.email, ''), '@', 1), ''),
-           'Someone')
-    into v_sender
-  from public.profiles p
-  where p.id = new.sender_id;
-
-  select nullif(btrim(b.name), '') into v_book
-  from public.shared_books b
-  where b.id = new.book_id;
-
-  -- The title carries who it's from; the book only needs saying when it has a
-  -- name of its own, and a message about an entry says so rather than opening
-  -- with an empty line when the sender sent the quote alone.
-  -- A vanishing message is never previewed. The whole promise is that it
-  -- leaves no copy behind, and a notification that quotes it would sit in the
-  -- shade long after the message itself had gone from both devices.
-  if new.vanish_at is not null then
-    v_preview := 'Sent a message';
-  else
-    v_preview := coalesce(nullif(btrim(new.body), ''),
-                          case when new.entry_id is not null then 'Shared an entry'
-                               else 'Sent a message' end);
-  end if;
-
-  begin
-    perform net.http_post(
-      url     := 'https://exp.host/--/api/v2/push/send',
-      headers := jsonb_build_object(
-        'Content-Type', 'application/json',
-        'accept', 'application/json'
-      ),
-      body    := jsonb_build_object(
-        'to', to_jsonb(v_tokens),
-        'title', coalesce(v_sender, 'Spendly') ||
-                 case when v_book is null then '' else ' · ' || v_book end,
-        'body', left(v_preview, 180),
-        'sound', 'default',
-        -- Must match the channel the app creates (lib/notifications.ts).
-        -- Android drops a notification whose channel doesn't exist.
-        'channelId', 'chat',
-        'priority', 'high',
-        'data', jsonb_build_object(
-          'type', 'chat',
-          'bookId', new.book_id,
-          'messageId', new.id
-        )
-      )
-    );
-  exception when others then
-    -- pg_net missing, or Expo unreachable. The message is already committed;
-    -- the other phone will see it on its next pull either way.
-    null;
-  end;
-
-  return new;
-end;
-$$;
-
-revoke all on function public.notify_shared_message() from public;
-
-drop trigger if exists notify_message on public.shared_messages;
-create trigger notify_message after insert on public.shared_messages
-  for each row execute function public.notify_shared_message();
+-- Moved to supabase/notifications.sql, which owns every push the app sends —
+-- chat messages, balance reminders, reactions, entry changes and joins — so
+-- the rules about who gets rung, and what they can switch off, live in one
+-- place. Run that file after this one. Re-running THIS file leaves the push
+-- triggers alone, so it can never quietly roll them back to an older version.
 
 -- 6) Realtime ----------------------------------------------------------------
 -- Messages and read markers join the shared tables already on the publication,

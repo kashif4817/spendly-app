@@ -20,11 +20,53 @@ import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
-import { ensureChatChannel, ensureNotificationPermission } from '@/lib/notifications';
+import { getMutedBooks, subscribeMutedBooks } from '@/lib/muted-books';
+import { getNotifyOff, subscribeNotifyPrefs } from '@/lib/notification-prefs';
+import { ensureNotificationPermission, ensureSharedChannels } from '@/lib/notifications';
 import { supabase } from '@/lib/supabase';
 
 /** The token this device last registered, so sign-out can retire exactly it. */
 let registered: string | null = null;
+
+/**
+ * What this phone has silenced, as the server needs it.
+ *
+ * Carried on the device's own token row because the server sends every
+ * shared-book push, and when the app is closed Android shows a push without
+ * asking the app — so a mute or a switch the server can't see is one that
+ * never takes effect. The row is own-row only, so it stays private.
+ */
+function devicePrefs() {
+  return {
+    muted_books: [...getMutedBooks()],
+    off_events: [...getNotifyOff()],
+  };
+}
+
+/** PostgREST's "no such column" — notifications.sql hasn't been run yet. */
+function isMissingColumn(error: { code?: string } | null): boolean {
+  return error?.code === 'PGRST204';
+}
+
+/**
+ * Push a changed mute or switch to the server straight away. A failure is
+ * fine: registration sends the same lists again on the next launch.
+ */
+async function syncDevicePrefs(): Promise<void> {
+  const token = registered;
+  if (!token) return;
+  try {
+    await supabase
+      .from('push_tokens')
+      .update({ ...devicePrefs(), updated_at: new Date().toISOString() })
+      .eq('id', token);
+  } catch {
+    // Offline. The next registration carries the current lists.
+  }
+}
+
+subscribeMutedBooks(() => void syncDevicePrefs());
+subscribeNotifyPrefs(() => void syncDevicePrefs());
 
 /**
  * The EAS project the token belongs to.
@@ -54,7 +96,7 @@ export async function registerPushToken(userId: string): Promise<void> {
 
     // Android 13+ won't show the permission prompt until a channel exists, and
     // the token request itself must come after the channel. Order matters.
-    await ensureChatChannel();
+    await ensureSharedChannels();
     if (!(await ensureNotificationPermission())) return;
 
     const id = projectId();
@@ -66,13 +108,18 @@ export async function registerPushToken(userId: string): Promise<void> {
     // `deleted` is set explicitly: a device that signs out and back in has a
     // retired row under the same token, and an upsert that left the flag alone
     // would leave it retired.
-    const { error } = await supabase.from('push_tokens').upsert({
+    const row = {
       id: token,
       user_id: userId,
       platform: Platform.OS,
       deleted: false,
       updated_at: new Date().toISOString(),
-    });
+    };
+    let { error } = await supabase.from('push_tokens').upsert({ ...row, ...devicePrefs() });
+    // A project that hasn't run notifications.sql yet has no columns for the
+    // lists. Registering without them still gets this phone its pushes —
+    // just without the per-phone filtering until the SQL lands.
+    if (isMissingColumn(error)) ({ error } = await supabase.from('push_tokens').upsert(row));
     if (error) return;
 
     registered = token;

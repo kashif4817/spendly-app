@@ -15,6 +15,7 @@ import {
   ChatJump,
   ChatNotice,
   ChatPinnedBar,
+  ChatReminderTag,
   ChatReactions,
   ChatReplyQuote,
   ChatSearchBar,
@@ -154,7 +155,7 @@ export default function SharedChatScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { refreshShared } = useSync();
-  const params = useLocalSearchParams<{ book?: string; entry?: string }>();
+  const params = useLocalSearchParams<{ book?: string; entry?: string; remind?: string }>();
   const bookId = params.book ?? '';
 
   const me = getCurrentUserId() ?? '';
@@ -256,6 +257,9 @@ export default function SharedChatScreen() {
   const [text, setText] = useState('');
   const [attachedId, setAttachedId] = useState<string | null>(params.entry ?? null);
   const [replyToId, setReplyToId] = useState<string | null>(null);
+  // The draft goes out as a balance reminder — headed as one in the thread,
+  // announced as one on their phone — until sent or the tag's cross is tapped.
+  const [asReminder, setAsReminder] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sheetFor, setSheetFor] = useState<SharedMessage | null>(null);
@@ -463,6 +467,9 @@ export default function SharedChatScreen() {
   const beginEdit = (message: SharedMessage) => {
     setReplyToId(null);
     setAttachedId(null);
+    // The edit replaces the drafted reminder in the box, so the tag goes too —
+    // otherwise the next ordinary message would quietly go out as a reminder.
+    setAsReminder(false);
     setEditingId(message.id);
     setText(message.body);
   };
@@ -499,11 +506,18 @@ export default function SharedChatScreen() {
     }
 
     if (!body && !attachedId) return;
-    addSharedMessage({ bookId, body, entryId: attachedId, replyTo: replyToId });
+    addSharedMessage({
+      bookId,
+      body,
+      entryId: attachedId,
+      replyTo: replyToId,
+      kind: asReminder ? 'reminder' : null,
+    });
     setText('');
     setChatDraft(bookId, '');
     setAttachedId(null);
     setReplyToId(null);
+    setAsReminder(false);
     // The moment the message lands, an indicator still saying "typing…" above
     // it reads as a second message that never comes.
     signalStoppedTyping();
@@ -768,7 +782,21 @@ export default function SharedChatScreen() {
     setEditingId(null);
     setText(line);
     setChatDraft(bookId, line);
+    setAsReminder(true);
   };
+
+  /**
+   * Arriving with ?remind=1 — from "Send a balance reminder" on the book or
+   * on its row in Loans — drafts the reminder straight away. Once per visit,
+   * and only after the balance it quotes has loaded.
+   */
+  const remindOnOpen = useRef(params.remind === '1');
+  useEffect(() => {
+    if (!remindOnOpen.current || !bookId) return;
+    remindOnOpen.current = false;
+    composeReminder();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on arrival
+  }, [bookId, balance]);
 
   const clearChat = () =>
     confirm({
@@ -1118,6 +1146,7 @@ export default function SharedChatScreen() {
                         expiring={!!item.expires_at}
                         vanishing={!!item.vanish_at}
                         edited={!!item.edited_at}
+                        reminder={item.kind === 'reminder'}
                         starred={starred.has(item.id)}
                         highlight={item.id === activeMatch}
                         selected={selected.has(item.id)}
@@ -1220,7 +1249,9 @@ export default function SharedChatScreen() {
             editing={!!editingId}
             onCancelEdit={stopEditing}
             banner={
-              expireAfter > 0 && vanish.mode !== 'on' ? (
+              asReminder && !editingId ? (
+                <ChatReminderTag onRemove={() => setAsReminder(false)} />
+              ) : expireAfter > 0 && vanish.mode !== 'on' ? (
                 <ChatNotice
                   icon="timer"
                   text={`Messages disappear after ${expiryLabel(expireAfter).toLowerCase()}`}
@@ -1378,7 +1409,7 @@ export default function SharedChatScreen() {
             },
           },
           {
-            label: 'Remind them about the balance',
+            label: 'Send a balance reminder',
             icon: 'notifications-active',
             onPress: composeReminder,
           },
@@ -1393,7 +1424,7 @@ export default function SharedChatScreen() {
             onPress: markUnread,
           },
           {
-            label: muted ? 'Unmute this chat' : 'Mute this chat',
+            label: muted ? 'Unmute notifications' : 'Mute notifications',
             icon: muted ? 'notifications' : 'notifications-off',
             onPress: () => setBookMuted(bookId, !muted),
           },

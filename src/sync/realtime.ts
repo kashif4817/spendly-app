@@ -70,12 +70,21 @@ function announceMessage(row: SharedMessage): void {
   // never reaches here; this is only ever something new to be told about.
   const sender = getSharedMemberName(row.sender_id) ?? 'New message';
   const book = getSharedBook(row.book_id)?.name?.trim();
+  // Same wording as the server's push (supabase/notifications.sql), so the
+  // notification reads the same whichever path wins the race.
+  const reminder = row.kind === 'reminder';
 
   void presentChatMessage({
     messageId: row.id,
     bookId: row.book_id,
-    title: book ? `${sender} · ${book}` : sender,
-    body: row.body.trim() || 'Shared an entry',
+    event: reminder ? 'reminder' : 'message',
+    title: reminder
+      ? `💰 ${getSharedMemberName(row.sender_id) ?? 'Someone'} sent a balance reminder`
+      : book
+        ? `${sender} · ${book}`
+        : sender,
+    // A vanishing message is never previewed — the server holds to that too.
+    body: row.vanish_at ? 'Sent a message' : row.body.trim() || 'Shared an entry',
   });
 }
 

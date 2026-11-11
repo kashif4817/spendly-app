@@ -42,9 +42,15 @@ function emit(): void {
   listeners.forEach((fn) => fn());
 }
 
-// Hydrate once at startup. Until it resolves the app renders the defaults,
-// which is also what a first run looks like — so there's nothing to flash.
-(async () => {
+/**
+ * Hydrate once at startup. Until it resolves the app renders the defaults,
+ * which is also what a first run looks like — so there's nothing to flash.
+ *
+ * Exported so the animated splash can wait for it: the splash blooms into the
+ * user's own scheme and accent, and starting before this lands would show the
+ * defaults and then switch colours halfway through the intro.
+ */
+export const appearanceHydrated: Promise<void> = (async () => {
   try {
     const [storedMode, storedAccent] = await Promise.all([
       AsyncStorage.getItem(MODE_KEY),

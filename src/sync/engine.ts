@@ -86,8 +86,11 @@ function recordFailure(
  *     arrangement its owner can redo with one drag, and the next reorder sends
  *     it again — whereas holding the row back would keep real money from
  *     syncing over a presentational detail.
+ *   • `kind` marks a message as a balance reminder. Without it the message
+ *     still arrives, word for word, just as ordinary chat — whereas holding
+ *     it back would stall the whole conversation until notifications.sql ran.
  */
-const OPTIONAL_COLUMNS = new Set(['sort']);
+const OPTIONAL_COLUMNS = new Set(['sort', 'kind']);
 
 /** The droppable column the server says it doesn't have, or null. */
 function missingColumn(error: { code?: string; message?: string } | null): string | null {

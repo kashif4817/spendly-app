@@ -292,9 +292,18 @@ export type SharedMessage = {
    * while the body itself is gone from both devices and from the server.
    */
   deleted_at: string | null;
+  /**
+   * '' (or null, on rows from before the column existed) for ordinary chat,
+   * 'reminder' for a balance reminder — which the thread heads as one and the
+   * server announces as "… sent a balance reminder" instead of a plain message.
+   */
+  kind: string | null;
   created_at: string;
   updated_at: string;
 };
+
+/** The kinds a message can be sent as, besides ordinary chat. */
+export type SharedMessageKind = 'reminder';
 
 /**
  * How far a member has read a book's thread.
@@ -444,6 +453,7 @@ export const SHARED_TABLE_COLUMNS: Record<SharedTable, string[]> = {
     'edited_at',
     'vanish_at',
     'deleted_at',
+    'kind',
     'created_at',
   ],
   shared_reactions: ['book_id', 'message_id', 'user_id', 'emoji', 'created_at'],
@@ -524,7 +534,7 @@ export function getCurrentUserId(): string | null {
 // live-refresh hook (see db/hooks.ts).
 const db = SQLite.openDatabaseSync('expenses.db', { enableChangeListener: true });
 
-const DATABASE_VERSION = 15;
+const DATABASE_VERSION = 16;
 
 let dbInitError: string | null = null;
 
@@ -786,6 +796,11 @@ function addChatColumns(): void {
   }
   if (!hasColumn('shared_messages', 'vanish_at')) {
     db.execSync('ALTER TABLE shared_messages ADD COLUMN vanish_at TEXT');
+  }
+  // Nullable with no default, on purpose: a pull from a server that doesn't
+  // have the column yet writes null here, and that has to be accepted.
+  if (!hasColumn('shared_messages', 'kind')) {
+    db.execSync('ALTER TABLE shared_messages ADD COLUMN kind TEXT');
   }
   if (!hasColumn('shared_books', 'expire_after')) {
     db.execSync('ALTER TABLE shared_books ADD COLUMN expire_after INTEGER NOT NULL DEFAULT 0');
@@ -1056,7 +1071,7 @@ export function migrate(): void {
     // Fresh install → create the current schema directly. Preset categories are
     // NOT seeded here; they're seeded into a brand-new account on sign-up.
     createDataTables();
-    version = 15;
+    version = 16;
   } else {
     if (version < 4) {
       // Existing pre-sync database (integer ids) → migrate its data to the
@@ -1136,6 +1151,12 @@ export function migrate(): void {
       // statement queries read as "newest first" — so nothing moves.
       addEntryOrderColumns();
       version = 15;
+    }
+    if (version === 15) {
+      // Balance reminders as a kind of message. Every existing message is
+      // ordinary chat, which is what a null kind means — nothing to backfill.
+      addChatColumns();
+      version = 16;
     }
   }
 
@@ -2644,6 +2665,8 @@ export type SharedMessageInput = {
   entryId?: string | null;
   /** The message this one answers, when it answers one. */
   replyTo?: string | null;
+  /** Send it as something other than ordinary chat — a balance reminder. */
+  kind?: SharedMessageKind | null;
 };
 
 /**
@@ -2668,8 +2691,8 @@ export function addSharedMessage(input: SharedMessageInput): string {
   db.runSync(
     `INSERT INTO shared_messages
        (id, book_id, sender_id, body, entry_id, reply_to, expires_at, vanish_at,
-        edited_at, deleted_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+        edited_at, deleted_at, kind, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)`,
     id,
     input.bookId,
     currentUserId ?? '',
@@ -2681,6 +2704,7 @@ export function addSharedMessage(input: SharedMessageInput): string {
     // expiry beside it: what a message promised when it was sent does not
     // change because the setting did afterwards.
     readVanish(getSharedBook(input.bookId)?.vanish_state).mode === 'on' ? updatedAt : null,
+    input.kind ?? '',
     updatedAt,
     updatedAt
   );

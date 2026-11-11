@@ -225,6 +225,35 @@ export function ChatNotice({
 }
 
 /**
+ * Above the composer while the draft will go out as a balance reminder.
+ *
+ * The draft is ordinary editable text — the wording that works between two
+ * particular people is theirs to choose — so this tag is what says it will
+ * arrive as a reminder rather than a plain message. The cross turns it back
+ * into a plain message without touching the words.
+ */
+export function ChatReminderTag({ onRemove }: { onRemove: () => void }) {
+  const theme = useTheme();
+  return (
+    <View style={styles.noticeRow}>
+      <View style={[styles.noticeChip, theme.glassWeak]}>
+        <MaterialIcons name="notifications-active" size={13} color={theme.accentTint} />
+        <ThemedText type="small" style={[styles.dayText, { color: theme.accentTint }]}>
+          Sends as a balance reminder
+        </ThemedText>
+        <Pressable
+          onPress={onRemove}
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel="Send as an ordinary message instead">
+          <MaterialIcons name="close" size={14} color={theme.textSecondary} />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+/**
  * Where you had read up to when you opened the thread.
  *
  * Fixed at open rather than live: a divider that crept down the screen as you
@@ -1248,6 +1277,7 @@ export function ChatBubble({
   expiring,
   vanishing,
   edited,
+  reminder,
   starred,
   highlight,
   selected,
@@ -1281,6 +1311,11 @@ export function ChatBubble({
   vanishing?: boolean;
   /** The sender changed the words after sending them. */
   edited?: boolean;
+  /**
+   * Sent as a balance reminder. Headed as one so it reads as a nudge about the
+   * book, not just another line of chat — the notification said so too.
+   */
+  reminder?: boolean;
   /** You have kept this one. Device-local, so only you ever see the mark. */
   starred?: boolean;
   /** The current search hit, lit so it can be found on a busy screen. */
@@ -1418,6 +1453,20 @@ export function ChatBubble({
             highlight && { borderWidth: 2, borderColor: theme.accentTint },
             selected && { borderWidth: 2, borderColor: theme.accent },
           ]}>
+          {!deleted && reminder && (
+            <View style={styles.reminderHead}>
+              <MaterialIcons
+                name="notifications-active"
+                size={14}
+                color={mine ? '#ffffff' : theme.accentTint}
+              />
+              <ThemedText
+                type="smallBold"
+                style={[styles.reminderHeadText, { color: mine ? '#ffffff' : theme.accentTint }]}>
+                Balance reminder
+              </ThemedText>
+            </View>
+          )}
           {!deleted && replyQuote}
           {!deleted && quote}
           {/* Text and time on ONE row, the way every chat app does it: a short
@@ -2388,6 +2437,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.one,
     flexShrink: 1,
+  },
+  reminderHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+    marginBottom: 2,
+  },
+  reminderHeadText: {
+    fontSize: 12,
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
   },
   deletedText: {
     fontSize: 14,

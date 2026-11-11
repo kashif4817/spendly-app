@@ -692,6 +692,13 @@ export default function PeopleScreen() {
       setNotice('That balance is already settled.');
       return;
     }
+    // A shared book has its own chat, and a reminder sent there reaches them
+    // as a proper "… sent a balance reminder" notification — so it goes there,
+    // drafted and still editable, instead of out through the share sheet.
+    if (row.bookId) {
+      router.push(`/shared-chat?book=${encodeURIComponent(row.bookId)}&remind=1` as Href);
+      return;
+    }
     const line =
       row.balance > 0
         ? `Hey ${row.person} — there’s ${formatMoney(amount)} pending between us whenever you get a chance 🙂`
@@ -750,7 +757,7 @@ export default function PeopleScreen() {
     }
     if (open) {
       actions.push({
-        label: 'Send a reminder',
+        label: person.bookId ? 'Send a balance reminder' : 'Send a reminder',
         icon: 'notifications-active',
         onPress: () => remind(person),
       });

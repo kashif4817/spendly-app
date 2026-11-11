@@ -8,12 +8,14 @@
  *     whose preferences (on/off + time) live in AsyncStorage. The app only
  *     ever schedules this one, so enabling cancels any previous and reschedules.
  *
- *   • shared-book chat — delivered as a push from the server (see
- *     supabase/shared-chat.sql) when the app isn't running, and raised locally
- *     by the realtime channel when it is. Both end up at the same handler,
- *     which is where the two rules that keep chat from being annoying live:
- *     don't notify about the thread the user is currently reading, and don't
- *     show the same message twice when both paths deliver it.
+ *   • shared-book notifications — chat messages, balance reminders,
+ *     reactions, entries added / edited / deleted, and someone joining. All
+ *     are pushed by the server (supabase/notifications.sql); chat messages are
+ *     ALSO raised locally by the realtime channel while the app is open, since
+ *     that path is faster. Everything ends up at the one handler below, which
+ *     is where the rules that keep this from being annoying live: the
+ *     per-phone switches, muted books, nothing about the screen you are
+ *     already looking at, and never the same message twice.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -21,6 +23,7 @@ import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
 import { isBookMuted } from '@/lib/muted-books';
+import { isNotifyEnabled } from '@/lib/notification-prefs';
 
 const ENABLED_KEY = 'spendly.reminder.enabled';
 const HOUR_KEY = 'spendly.reminder.hour';
@@ -49,6 +52,14 @@ const LEGACY_CHANNEL_ID = 'reminders';
  */
 export const CHAT_CHANNEL_ID = 'chat';
 
+/**
+ * The Android channel for what happens IN a shared book: entries added,
+ * edited or deleted, and someone joining. Separate from chat so either can be
+ * silenced in Android's own settings without losing the other. Same rule as
+ * above — must match the `channelId` supabase/notifications.sql sends.
+ */
+export const ACTIVITY_CHANNEL_ID = 'book-activity';
+
 export const DEFAULT_HOUR = 21; // 9:00 PM
 export const DEFAULT_MINUTE = 0;
 
@@ -73,44 +84,91 @@ export function setActiveChatBook(bookId: string | null): void {
 }
 
 /**
+ * The shared book whose own screen is open, if any.
+ *
+ * Same idea as the chat: an entry the other member adds appears on that screen
+ * as it lands, so a banner announcing it would only cover the thing it is
+ * announcing. Set by the book screen on focus, cleared on blur.
+ */
+let activeBook: string | null = null;
+
+export function setActiveBook(bookId: string | null): void {
+  activeBook = bookId;
+}
+
+/**
  * Messages already shown, so the second delivery of one stays quiet.
  *
- * A message can reach a foregrounded app twice: once over the realtime socket
- * (which raises a local notification straight away) and once as the server's
- * push. They carry the same message id, so the loser of that race is dropped
- * here. Bounded because a long session should not grow a set forever.
+ * A message can reach a foregrounded app twice: over the realtime socket
+ * (which raises a local notification) and as the server's push. Both carry
+ * the message id, and whichever arrives first claims it here — the realtime
+ * path when it raises its own, the handler when a push gets in first. Bounded
+ * because a long session should not grow a set forever.
  */
 const presented = new Set<string>();
 const PRESENTED_CAP = 200;
 
-/** Remember a message as shown. Called just before raising a local one. */
-export function markChatPresented(messageId: string): void {
+function claimPresented(messageId: string): void {
   if (presented.size >= PRESENTED_CAP) presented.clear();
   presented.add(messageId);
 }
 
-/** Show notifications in the foreground too — except the two cases above. */
+/**
+ * What a notification's data carries.
+ *
+ *   type     — 'chat' and 'book' for shared books, 'reminder' for the daily
+ *              nudge, 'test' for the test button.
+ *   event    — which kind of shared-book notification, matching the switches
+ *              in lib/notification-prefs.ts. Older local ones carry none.
+ *   local    — raised on this phone by the realtime path, not pushed.
+ */
+type NotificationData = {
+  type?: string;
+  event?: string;
+  bookId?: string;
+  messageId?: string;
+  local?: boolean;
+};
+
+/** True when a shared-book notification should arrive without a sound or a banner. */
+function staysQuiet(data: NotificationData): boolean {
+  if (data.type !== 'chat' && data.type !== 'book') return false;
+  const book = data.bookId;
+  if (!book) return false;
+
+  const event = data.event ?? (data.type === 'chat' ? 'message' : '');
+  // Switched off on the Notifications screen. The server skips these too,
+  // but a push already in flight when the switch moved still lands here.
+  if (event && !isNotifyEnabled(event)) return true;
+  // Muted on this phone — same reasoning.
+  if (isBookMuted(book)) return true;
+  // Already looking at it.
+  if (data.type === 'chat' && book === activeChatBook) return true;
+  if (data.type === 'book' && book === activeBook) return true;
+
+  // The same message by both paths: shown once. A LOCAL notification has
+  // already claimed its id (presentChatMessage does that before raising it),
+  // so only a push is ever the duplicate — checking the local one too would
+  // silence every in-app chat notification, which it once did.
+  if ((event === 'message' || event === 'reminder') && data.messageId && !data.local) {
+    if (presented.has(data.messageId)) return true;
+    claimPresented(data.messageId);
+  }
+  return false;
+}
+
+/** Show notifications in the foreground too — except the cases above. */
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
-    const data = notification.request.content.data as
-      | { type?: string; bookId?: string; messageId?: string }
-      | undefined;
-
-    const mute =
-      data?.type === 'chat' &&
-      ((!!data.bookId && data.bookId === activeChatBook) ||
-        // Silenced on this device. Checked here rather than at send time
-        // because the server has no business knowing which of someone's
-        // phones they have chosen to keep quiet.
-        (!!data.bookId && isBookMuted(data.bookId)) ||
-        (!!data.messageId && presented.has(data.messageId)));
+    const data = (notification.request.content.data ?? {}) as NotificationData;
+    const quiet = staysQuiet(data);
 
     return {
-      shouldShowBanner: !mute,
-      shouldShowList: !mute,
-      // The reminder stays silent (it's a nudge, not news); a message from the
-      // other member is news.
-      shouldPlaySound: !mute && data?.type === 'chat',
+      shouldShowBanner: !quiet,
+      shouldShowList: !quiet,
+      // The daily reminder stays silent (it's a nudge, not news); something
+      // the other member did in a shared book is news.
+      shouldPlaySound: !quiet && (data.type === 'chat' || data.type === 'book'),
       shouldSetBadge: false,
     };
   },
@@ -142,18 +200,24 @@ async function ensureAndroidChannel(): Promise<void> {
 }
 
 /**
- * Create the chat channel.
+ * Create the two shared-book channels: chat, and what happens in the book.
  *
- * HIGH rather than DEFAULT: a message in a shared book is someone talking to
- * you, which is the one thing in this app worth a heads-up banner. Android
- * 13+ also refuses to show the permission prompt until a channel exists, and
- * `getExpoPushTokenAsync` must come after this — so registration calls it
- * first (see lib/push.ts).
+ * HIGH rather than DEFAULT for both: each is the other member doing something
+ * that involves you — talking to you, or changing what the two of you owe —
+ * which is what a heads-up banner is for. Either can be lowered in Android's
+ * settings on its own. Android 13+ also refuses to show the permission prompt
+ * until a channel exists, and `getExpoPushTokenAsync` must come after this —
+ * so registration calls it first (see lib/push.ts).
  */
-export async function ensureChatChannel(): Promise<void> {
+export async function ensureSharedChannels(): Promise<void> {
   if (Platform.OS !== 'android') return;
   await Notifications.setNotificationChannelAsync(CHAT_CHANNEL_ID, {
     name: 'Shared book chat',
+    importance: Notifications.AndroidImportance.HIGH,
+  });
+  await Notifications.setNotificationChannelAsync(ACTIVITY_CHANNEL_ID, {
+    name: 'Shared book activity',
+    description: 'Entries added, edited or deleted, and people joining',
     importance: Notifications.AndroidImportance.HIGH,
   });
 }
@@ -182,22 +246,34 @@ export async function ensureNotificationPermission(): Promise<boolean> {
 export async function presentChatMessage(message: {
   messageId: string;
   bookId: string;
+  /** 'reminder' for a balance reminder; ordinary chat otherwise. */
+  event: 'message' | 'reminder';
   title: string;
   body: string;
 }): Promise<void> {
   try {
+    // The server's push got here first and was shown already.
+    if (presented.has(message.messageId)) return;
+
     const perms = await Notifications.getPermissionsAsync();
     if (!perms.granted) return;
 
-    await ensureChatChannel();
+    await ensureSharedChannels();
     // Claimed before scheduling, so the server's push for the same message
     // loses the race and is dropped by the handler rather than shown twice.
-    markChatPresented(message.messageId);
+    claimPresented(message.messageId);
+    const data: NotificationData = {
+      type: 'chat',
+      event: message.event,
+      bookId: message.bookId,
+      messageId: message.messageId,
+      local: true,
+    };
     await Notifications.scheduleNotificationAsync({
       content: {
         title: message.title,
         body: message.body,
-        data: { type: 'chat', bookId: message.bookId, messageId: message.messageId },
+        data,
       },
       // `trigger: null` fires instantly but has nowhere to name a channel, so
       // Android would file it under the fallback "Miscellaneous" channel —
@@ -224,7 +300,7 @@ export async function presentChatMessage(message: {
  * declined notification permission while enabling.
  */
 export async function applyReminder(enabled: boolean, hour: number, minute: number): Promise<boolean> {
-  await Notifications.cancelAllScheduledNotificationsAsync();
+  await cancelReminders();
 
   if (enabled) {
     // THE CHANNEL COMES FIRST, and the order is the whole fix.
@@ -243,6 +319,8 @@ export async function applyReminder(enabled: boolean, hour: number, minute: numb
         content: {
           title: 'Track today’s spending',
           body: 'Add what you spent today so your balance stays accurate.',
+          // Routes a tap straight to "Add expense" (components/notification-router).
+          data: { type: 'reminder' } satisfies NotificationData,
         },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DAILY,
@@ -274,8 +352,40 @@ export async function applyReminder(enabled: boolean, hour: number, minute: numb
  */
 export async function ensureDefaultReminder(): Promise<void> {
   const chosen = await AsyncStorage.getItem(ENABLED_KEY);
-  if (chosen !== null) return; // user already decided
-  await applyReminder(true, DEFAULT_HOUR, DEFAULT_MINUTE);
+  if (chosen === null) {
+    await applyReminder(true, DEFAULT_HOUR, DEFAULT_MINUTE);
+    return;
+  }
+  // Already decided. A reminder that is on gets queued afresh, so one
+  // scheduled by an older version — before reminders carried the data that
+  // routes a tap to "Add expense" — picks it up. Only with permission already
+  // granted: this path must never be what puts a prompt in front of someone.
+  const prefs = await getReminderPrefs();
+  if (!prefs.enabled) return;
+  if (!(await Notifications.getPermissionsAsync()).granted) return;
+  await applyReminder(true, prefs.hour, prefs.minute);
+}
+
+/**
+ * Cancel the daily reminder (and any pending test), and nothing else.
+ *
+ * Not `cancelAllScheduledNotificationsAsync`: a chat notification raised a
+ * moment ago is also a scheduled notification for its one second, and
+ * changing the reminder's time must not swallow it. Reminders from older
+ * versions carry no data at all, which is why the test is "not chat" rather
+ * than "is a reminder".
+ */
+async function cancelReminders(): Promise<void> {
+  const queued = await Notifications.getAllScheduledNotificationsAsync();
+  await Promise.all(
+    queued
+      .filter((request) => !isChat(request.content.data))
+      .map((request) => Notifications.cancelScheduledNotificationAsync(request.identifier))
+  );
+}
+
+function isChat(data: unknown): boolean {
+  return (data as NotificationData | null)?.type === 'chat';
 }
 
 /**
@@ -320,7 +430,8 @@ export async function getReminderStatus(): Promise<ReminderStatus> {
 
   return {
     permission: perms.granted ? 'granted' : perms.canAskAgain ? 'undetermined' : 'denied',
-    scheduled: queued.length,
+    // The reminder's own queue — not a chat notification passing through it.
+    scheduled: queued.filter((request) => !isChat(request.content.data)).length,
     nextAt,
   };
 }
@@ -343,6 +454,7 @@ export async function sendTestNotification(): Promise<boolean> {
     content: {
       title: 'Spendly test',
       body: 'Reminders can reach you. The daily one will look like this.',
+      data: { type: 'test' } satisfies NotificationData,
     },
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,

@@ -80,13 +80,38 @@ message carries `vanish_at` and is never previewed in a push notification,
 never forwarded, never pinned and never exported.
 
 …plus the RLS policies (members read the thread, only the sender can change
-their own message, push tokens are own-row only), the realtime publication
-entries, and the trigger that sends a push when a message is inserted.
+their own message, push tokens are own-row only) and the realtime publication
+entries.
 
 **After this step the chat works**: messages sync like entries do, arrive live
 over the realtime socket while both apps are open, and show an unread badge
 when they aren't. Everything below is about being notified while the app is
 closed.
+
+### Then run `supabase/notifications.sql`
+
+Every push the app sends comes from this one file — run it after
+`shared-chat.sql`, and re-run it to upgrade. It notifies the **other** member
+of a shared book (never whoever did it):
+
+| Event | When | Android channel | Tap opens |
+| --- | --- | --- | --- |
+| `message` | A chat message | Shared book chat | The chat |
+| `reminder` | A balance reminder ("💰 Kashif sent a balance reminder") | Shared book chat | The chat |
+| `reaction` | A reaction to a message **you** sent | Shared book chat | The chat |
+| `entry_added` | An entry added — directly or by a split — or a deleted one restored | Shared book activity | The book |
+| `entry_edited` | Amount, note, day or payer changed (a reorder doesn't count) | Shared book activity | The book |
+| `entry_deleted` | An entry deleted | Shared book activity | The book |
+| `joined` | Someone joined the book | Shared book activity | The book |
+
+Each phone can switch any of these off (Settings → Notifications) or mute a
+whole book (its ⋮ menu). Both are stored on that phone's own `push_tokens` row
+(`off_events`, `muted_books`), because with the app closed Android shows a push
+without asking the app — the server has to know. The row is own-row only, so
+the other member never sees what you silenced.
+
+Until it has been run, a balance reminder still sends — just as an ordinary
+message — and pushes go out without the per-phone filtering.
 
 ### If you skip the push part
 
@@ -103,10 +128,11 @@ A push to an Android device goes through Firebase Cloud Messaging, so the build
 needs FCM credentials. This is a **build-time** change — it cannot ship over
 the air.
 
-1. In the [Firebase console](https://console.firebase.google.com), use (or
-   create) a project, add an Android app with package name
-   `com.codeflyx.expensetracker`, and download `google-services.json`.
-2. Put the file at the repo root and point `app.json` at it:
+**Status: done.** Firebase project `spendly-c9d83`, FCM API (V1) enabled.
+
+1. In the [Firebase console](https://console.firebase.google.com), the project
+   has an Android app with package name `com.codeflyx.expensetracker`. Its
+   `google-services.json` is at the repo root and `app.json` points at it:
 
    ```json
    "android": {
@@ -115,14 +141,23 @@ the air.
    }
    ```
 
-   Keep it out of git (`.gitignore`) and upload it to EAS instead:
-   `eas secret:create --name GOOGLE_SERVICES_JSON --type file --value ./google-services.json`
-   then set `"googleServicesFile": "$GOOGLE_SERVICES_JSON"`.
-3. In Firebase → Project settings → Service accounts, generate a private key,
-   then give it to EAS:
-   `eas credentials` → Android → *FCM V1 service account key* → upload the JSON.
-4. Rebuild and install:
-   `eas build --platform android --profile preview`
+   **It is committed on purpose.** It holds public identifiers only (Expo's
+   docs say so), it ends up inside every APK anyway, and EAS Build only bakes
+   in files it can see. Don't move it to an env var: `$VAR` interpolation does
+   not work in a static `app.json`.
+2. The **service-account key** is different: it's a private key. Generate it
+   in Firebase → Project settings → Service accounts → *Generate new private
+   key*, then upload it to EAS (either way works):
+   - `eas credentials` → Android → production → Google Service Account →
+     *Manage your Google Service Account Key for Push Notifications (FCM V1)* →
+     *Set up…* → *Upload a new service account key*, or
+   - expo.dev → project → Project settings → Credentials → Android →
+     `com.codeflyx.expensetracker` → *FCM V1 service account key* → upload.
+
+   Never commit it — `.gitignore` blocks `*firebase-adminsdk*.json`. Expo's
+   servers use it when **sending**, so replacing it never needs a rebuild.
+3. Rebuild and install — `google-services.json` only reaches phones in a new
+   native build. Bump `version` in `app.json`, then `npm run release`.
 
 A new build is required for one more reason: this change added the
 `expo-notifications` config plugin to `app.json` (for the notification icon and

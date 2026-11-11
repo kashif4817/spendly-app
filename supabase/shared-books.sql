@@ -128,9 +128,14 @@ drop policy if exists member_read on public.shared_book_members;
 create policy member_read on public.shared_book_members for select to authenticated
   using (public.is_book_member(book_id));
 
+-- Leaving is the ONLY change a member may make to their own row, so the
+-- updated row must come out `deleted`. Without that, someone who had left
+-- could flip `deleted` back to false and walk straight back in — no code, no
+-- expiry, and past the two-person limit if someone else had joined since.
+-- Coming back goes through join_book() like everyone else.
 drop policy if exists member_leave on public.shared_book_members;
 create policy member_leave on public.shared_book_members for update to authenticated
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
+  using (user_id = auth.uid()) with check (user_id = auth.uid() and deleted);
 
 -- Entries: any member reads and adds; only the author may change or delete
 -- their own. This is what stops either side quietly rewriting the record.

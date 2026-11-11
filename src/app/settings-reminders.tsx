@@ -1,9 +1,15 @@
 /**
- * The daily nudge to log what you spent.
+ * Notifications: the daily nudge to log what you spent, and a switch for each
+ * kind of shared-book notification.
  *
- * Turning it on needs the OS notification permission, which can be refused —
- * so the switch only moves once `applyReminder` says the reminder was actually
- * scheduled, rather than showing "on" for something that will never fire.
+ * Turning the reminder on needs the OS notification permission, which can be
+ * refused — so that switch only moves once `applyReminder` says the reminder
+ * was actually scheduled, rather than showing "on" for something that will
+ * never fire.
+ *
+ * The shared-book switches are all on until turned off, and apply to this
+ * phone only. The server is told too (lib/push.ts), since it is the one that
+ * sends them — see lib/notification-prefs.ts for why that has to be so.
  */
 
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
@@ -15,9 +21,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
+import { useNotifyOff } from '@/hooks/use-notify-prefs';
 import { useTheme } from '@/hooks/use-theme';
 import { notify } from '@/lib/confirm';
 import { dateKey, formatRelativeDay } from '@/lib/date';
+import {
+  NOTIFY_OPTIONS,
+  setNotifyEnabled,
+  type NotifyGroup,
+} from '@/lib/notification-prefs';
 import {
   applyReminder,
   formatTime,
@@ -27,6 +39,14 @@ import {
   type ReminderStatus,
 } from '@/lib/notifications';
 
+/** The shared-book switches, a card per group. */
+const GROUP_TITLES: Record<NotifyGroup, string> = {
+  Chat: 'Shared book chat',
+  Entries: 'Shared book entries',
+  Members: 'Shared book members',
+};
+const GROUPS = Object.keys(GROUP_TITLES) as NotifyGroup[];
+
 const TIME_PRESETS = [
   { h: 8, m: 0 },
   { h: 13, m: 0 },
@@ -34,8 +54,9 @@ const TIME_PRESETS = [
   { h: 21, m: 0 },
 ];
 
-export default function SettingsRemindersScreen() {
+export default function SettingsNotificationsScreen() {
   const theme = useTheme();
+  const off = useNotifyOff();
   const [reminder, setReminder] = useState({ enabled: false, hour: 21, minute: 0 });
   const [status, setStatus] = useState<ReminderStatus | null>(null);
 
@@ -89,7 +110,7 @@ export default function SettingsRemindersScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <Stack.Screen options={{ title: 'Reminders' }} />
+      <Stack.Screen options={{ title: 'Notifications' }} />
       <SafeAreaView edges={['bottom']} style={styles.safeArea}>
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <ThemedText type="smallBold" themeColor="textSecondary" style={styles.section}>
@@ -136,6 +157,37 @@ export default function SettingsRemindersScreen() {
 
           <ThemedText type="small" themeColor="textSecondary" style={styles.footnote}>
             One reminder a day, at the time you pick. It never includes any of your figures.
+          </ThemedText>
+
+          {GROUPS.map((group) => (
+            <View key={group}>
+              <ThemedText type="smallBold" themeColor="textSecondary" style={styles.section}>
+                {GROUP_TITLES[group]}
+              </ThemedText>
+              <ThemedView type="backgroundElement" style={styles.card}>
+                {NOTIFY_OPTIONS.filter((option) => option.group === group).map((option) => (
+                  <View key={option.event} style={styles.row}>
+                    <View style={styles.copy}>
+                      <ThemedText type="smallBold">{option.label}</ThemedText>
+                      <ThemedText type="small" themeColor="textSecondary">
+                        {option.hint}
+                      </ThemedText>
+                    </View>
+                    <Switch
+                      value={!off.has(option.event)}
+                      onValueChange={(on) => setNotifyEnabled(option.event, on)}
+                      trackColor={{ true: theme.accent }}
+                      accessibilityLabel={option.label}
+                    />
+                  </View>
+                ))}
+              </ThemedView>
+            </View>
+          ))}
+
+          <ThemedText type="small" themeColor="textSecondary" style={styles.footnote}>
+            Only ever about your shared books, and never about something you did yourself. These
+            apply to this phone. To quiet one book completely, use Mute notifications in its menu.
           </ThemedText>
 
           {/* Everything below is here because "the reminder didn't arrive" has
