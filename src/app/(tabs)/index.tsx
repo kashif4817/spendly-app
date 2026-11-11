@@ -43,9 +43,6 @@ import { formatMoney, HIDDEN_AMOUNT } from '@/lib/money';
 import { setWeekStart } from '@/lib/week-start';
 import { useSync } from '@/sync/provider';
 
-/** See the note where it's rendered. Unmounted, it doesn't ask GitHub either. */
-const SHOW_UPDATE_BUTTON = false;
-
 /** How many categories "Where it went" lists. */
 const TOP_CATEGORIES = 3;
 
@@ -117,12 +114,12 @@ export default function DashboardScreen() {
               </ThemedText>
             </View>
             <View style={styles.topActions}>
-              {/* Only there while a newer APK is waiting to be installed —
-                  and switched off for now: it hands the download to the
-                  browser, which once delivered a damaged APK that Android
-                  refused. Back on in 1.1.2, which downloads and checks the
-                  file inside the app (branch next/1.1.2). */}
-              {SHOW_UPDATE_BUTTON && <AppUpdateButton />}
+              {/* Only there while a newer APK is waiting to be installed. It
+                  downloads and checks the file inside the app before Android's
+                  installer sees it (lib/apk-update.ts) — the browser once
+                  delivered a damaged APK, which is why 1.1.0 and 1.1.1 had
+                  this button switched off over the air. */}
+              <AppUpdateButton />
               <Pressable
                 onPress={() => router.push('/profile' as Href)}
                 accessibilityRole="button"
