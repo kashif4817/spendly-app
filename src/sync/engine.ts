@@ -26,6 +26,7 @@ import {
 } from '@/db';
 import { supabase } from '@/lib/supabase';
 import { isSyncConfigured } from '@/sync/config';
+import { sendLockedUploadAsRequest } from '@/sync/entry-requests';
 import { foldCursors, isMissingTable, pullTable } from '@/sync/pull';
 import { pullShared } from '@/sync/shared';
 
@@ -99,10 +100,25 @@ function missingColumn(error: { code?: string; message?: string } | null): strin
   return name && OPTIONAL_COLUMNS.has(name) ? name : null;
 }
 
+/**
+ * Columns only the server writes. Pulled like any other, never uploaded:
+ * `posted_at` is when the server received an entry — the start of its 24 free
+ * hours — and a phone sending its own would be a phone choosing its own lock.
+ * (The server ignores it anyway; leaving it out keeps the upload honest.)
+ */
+const SERVER_COLUMNS = new Set(['posted_at']);
+
+/** The server refused an entry upload because the entry is past its 24 hours. */
+function isLockedRefusal(table: AnyTable, error: { message?: string } | null): boolean {
+  return table === 'shared_entries' && !!error?.message?.includes('ENTRY_LOCKED');
+}
+
 /** Build the row object to upload, forcing the owner and a live (non-deleted) state. */
 function buildUploadRow(table: AnyTable, local: Record<string, any>, userId: string) {
   const row: Record<string, any> = {};
-  for (const col of columnsFor(table)) row[col] = local[col];
+  for (const col of columnsFor(table)) {
+    if (!SERVER_COLUMNS.has(col)) row[col] = local[col];
+  }
   // Shared rows belong to a book, not to one account, so they carry no
   // `user_id`; the server ties them to you through `author_id` instead.
   if (!isSharedTable(table)) row.user_id = userId;
@@ -120,7 +136,21 @@ function ownerColumn(table: AnyTable): string {
   return isSharedTable(table) ? SHARED_OWNER_COLUMN[table] : 'user_id';
 }
 
-/** Send queued local changes to Supabase. Stops (returns false) on the first error. */
+/**
+ * An entry change the server refused as locked: made in time, arrived late.
+ * It goes to the other member as a request for the same change instead of
+ * sitting in the outbox for ever (see sync/entry-requests.ts). The outbox row
+ * is dropped only once the server has answered, and dropped BEFORE the
+ * server's copy is put back — a queued change shields the local row from
+ * every pull.
+ */
+async function settleLocked(seq: number, rowId: string, local: Record<string, any> | null) {
+  const { handled, restore } = await sendLockedUploadAsRequest(rowId, local);
+  if (!handled) return; // couldn't reach the server — stays queued, tried again next cycle
+  removeOutboxEntry(seq);
+  await restore();
+}
+
 /**
  * Send queued local changes to Supabase.
  *
@@ -151,6 +181,10 @@ async function push(userId: string, only?: readonly string[]): Promise<boolean> 
         .update({ deleted: true, updated_at: new Date().toISOString() })
         .eq('id', entry.row_id)
         .eq(ownerColumn(table), userId);
+      if (isLockedRefusal(table, error)) {
+        await settleLocked(entry.seq, entry.row_id, null);
+        continue;
+      }
       if (error) {
         if (!isMissingTable(error)) recordFailure(table, entry.row_id, 'delete', error);
         allSent = false;
@@ -178,6 +212,11 @@ async function push(userId: string, only?: readonly string[]): Promise<boolean> 
       for (let absent = missingColumn(error); absent && absent in row; absent = missingColumn(error)) {
         delete row[absent];
         ({ error } = await supabase.from(table).upsert(row));
+      }
+
+      if (isLockedRefusal(table, error)) {
+        await settleLocked(entry.seq, entry.row_id, local);
+        continue;
       }
 
       if (error) {

@@ -29,6 +29,8 @@ import { useBalanceCovered } from '@/hooks/use-balance-privacy';
 import { TOTAL_PAYABLE_SCOPE, TOTAL_RECEIVABLE_SCOPE } from '@/lib/balance-privacy';
 import { useTheme } from '@/hooks/use-theme';
 import { useWeekStart } from '@/hooks/use-week-start';
+import { useRecentUpdate } from '@/hooks/use-recent-update';
+import { INSTALLED_VERSION } from '@/lib/app-release';
 import {
   addDays,
   formatFullDate,
@@ -55,6 +57,7 @@ export default function DashboardScreen() {
   const router = useRouter();
   const { name, avatarUrl } = useSync();
   const iconFor = useCategoryIcon();
+  const justUpdated = useRecentUpdate();
 
   const weekStartsOn = useWeekStart();
 
@@ -109,9 +112,36 @@ export default function DashboardScreen() {
               <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
                 {greeting} · {formatFullDate(today)}
               </ThemedText>
-              <ThemedText type="title" style={styles.hello} numberOfLines={1}>
-                {firstName}
-              </ThemedText>
+              <View style={styles.nameRow}>
+                <ThemedText type="title" style={[styles.hello, styles.nameText]} numberOfLines={1}>
+                  {firstName}
+                </ThemedText>
+                {/* The installed version, where it can be read at a glance —
+                    "which build is this phone on?" comes up every time an
+                    update goes out. Opens About for the details. */}
+                <Pressable
+                  onPress={() => router.push('/settings-about' as Href)}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Version ${INSTALLED_VERSION}${
+                    justUpdated ? ', updated in the last day' : ''
+                  }. Opens About.`}
+                  style={({ pressed }) => [
+                    styles.versionPill,
+                    theme.glassWeak,
+                    pressed && styles.versionPressed,
+                  ]}>
+                  {/* For a day after an over-the-air update first runs on
+                      this phone — the number itself doesn't change with one. */}
+                  {justUpdated && (
+                    <View style={[styles.updatedDot, { backgroundColor: theme.accent }]} />
+                  )}
+                  <ThemedText style={[styles.versionText, { color: theme.accentTint }]}>
+                    v{INSTALLED_VERSION}
+                    {justUpdated ? ' · Updated' : ''}
+                  </ThemedText>
+                </Pressable>
+              </View>
             </View>
             <View style={styles.topActions}>
               {/* Only there while a newer APK is waiting to be installed. It
@@ -478,6 +508,38 @@ const styles = StyleSheet.create({
     fontSize: 30,
     lineHeight: 36,
     fontWeight: '700',
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  // A long name gives way before the version pill does.
+  nameText: {
+    flexShrink: 1,
+  },
+  versionPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: Radius.full,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 3,
+    marginTop: 4,
+  },
+  updatedDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  versionPressed: {
+    opacity: 0.7,
+  },
+  versionText: {
+    fontSize: 11.5,
+    lineHeight: 15,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
   avatar: {
     width: 44,

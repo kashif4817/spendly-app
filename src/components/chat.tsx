@@ -41,6 +41,7 @@ import Reanimated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { dropLastGrapheme, EmojiPanel } from '@/components/emoji-picker';
+import { EditedTag } from '@/components/entry-safety';
 import { StatementDay } from '@/components/statement';
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Scrim, Spacing } from '@/constants/theme';
@@ -797,63 +798,72 @@ export function ChatPinnedBar({
 }
 
 /**
- * Where the book stands, above the conversation about it.
+ * The chat's header title: who the thread is with, and where the book stands
+ * on the line beneath it.
  *
  * THE REASON THIS CHAT EXISTS IN THE FIRST PLACE is that the number and the
- * talk about the number were in two different apps. Putting the balance at
- * the top of the thread closes the last of that gap: you no longer have to
- * leave the conversation to remember what it is about.
+ * talk about the number were in two different apps. Keeping the balance under
+ * the name closes the last of that gap without spending a row of the thread on
+ * it: you never have to leave the conversation to remember what it is about.
  *
- * Tapping it settles up, which is the only thing anyone ever wants to do with
- * a balance that isn't zero.
+ * Tapping an open balance settles up, which is the only thing anyone ever
+ * wants to do with a balance that isn't zero. Without `balance` it is the
+ * name alone (nobody has joined yet, or a vanishing session is running).
  */
-export function ChatBalanceStrip({
+export function ChatHeaderTitle({
+  title,
   balance,
   theirName,
   onSettle,
 }: {
+  title: string;
   /** Positive when you are owed; the sign is the whole message. */
-  balance: number;
+  balance?: number;
   theirName: string;
   onSettle: () => void;
 }) {
   const theme = useTheme();
-  const settled = Math.abs(balance) < 0.005;
-  const youAreOwed = balance > 0;
+  const hasBalance = balance !== undefined;
+  const amount = Math.abs(balance ?? 0);
+  const settled = amount < 0.005;
+  const youAreOwed = (balance ?? 0) > 0;
   const color = settled ? theme.textSecondary : youAreOwed ? theme.money.in : theme.money.out;
 
   return (
-    <View style={[styles.balanceStrip, theme.glassWeak]}>
-      <MaterialIcons
-        name={settled ? 'check-circle-outline' : youAreOwed ? 'call-made' : 'call-received'}
-        size={15}
-        color={color}
-      />
-      <ThemedText type="small" themeColor="textSecondary" style={styles.balanceText} numberOfLines={1}>
-        {settled
-          ? 'All settled up'
-          : youAreOwed
-            ? `${theirName} owes you `
-            : `You owe ${theirName} `}
-        {!settled && (
-          <ThemedText type="smallBold" style={{ color }}>
-            {formatMoney(Math.abs(balance))}
-          </ThemedText>
-        )}
+    <Pressable
+      onPress={onSettle}
+      disabled={!hasBalance || settled}
+      hitSlop={6}
+      style={({ pressed }) => [styles.headerTitle, pressed && styles.pressed]}
+      accessibilityRole={hasBalance && !settled ? 'button' : 'header'}
+      accessibilityLabel={
+        !hasBalance
+          ? title
+          : settled
+            ? `${title}. All settled up`
+            : `${title}. ${youAreOwed ? `${theirName} owes you` : `You owe ${theirName}`} ${formatMoney(amount)}. Tap to settle up`
+      }>
+      <ThemedText style={styles.headerName} numberOfLines={1}>
+        {title}
       </ThemedText>
-      {!settled && (
-        <Pressable
-          onPress={onSettle}
-          hitSlop={6}
-          style={({ pressed }) => [styles.settleBtn, theme.glass, pressed && styles.pressed]}
-          accessibilityRole="button"
-          accessibilityLabel={`Settle up ${formatMoney(Math.abs(balance))}`}>
-          <ThemedText type="smallBold" style={{ color: theme.accentTint }}>
-            Settle up
+      {hasBalance && (
+        <View style={styles.headerBalance}>
+          <MaterialIcons
+            name={settled ? 'check-circle-outline' : youAreOwed ? 'call-made' : 'call-received'}
+            size={12}
+            color={color}
+          />
+          <ThemedText themeColor="textSecondary" style={styles.headerBalanceText} numberOfLines={1}>
+            {settled ? 'All settled up' : youAreOwed ? `${theirName} owes you ` : `You owe ${theirName} `}
+            {!settled && (
+              <ThemedText style={[styles.headerBalanceText, styles.headerAmount, { color }]}>
+                {formatMoney(amount)}
+              </ThemedText>
+            )}
           </ThemedText>
-        </Pressable>
+        </View>
       )}
-    </View>
+    </Pressable>
   );
 }
 
@@ -1085,6 +1095,7 @@ export function ChatEntryQuote({
   entry,
   youPaid,
   payerName,
+  edited,
   onTint,
   onPress,
   onRemove,
@@ -1093,6 +1104,12 @@ export function ChatEntryQuote({
   entry: SharedEntry | null;
   youPaid: boolean;
   payerName: string;
+  /**
+   * Changed since it was added. The quote shows the entry as it is NOW, so a
+   * figure discussed in the thread may not be the one it shows — the tag
+   * says so, and the entry's history says what it was.
+   */
+  edited?: boolean;
   onTint?: boolean;
   onPress?: () => void;
   onRemove?: () => void;
@@ -1132,6 +1149,7 @@ export function ChatEntryQuote({
           <ThemedText type="smallBold" style={[styles.quoteTitle, { color: ink }]} numberOfLines={1}>
             {youPaid ? 'You paid' : `${payerName} paid`} {formatMoney(entry.amount)}
           </ThemedText>
+          {edited && <EditedTag onTint={onTint} />}
         </View>
         <ThemedText type="small" style={{ color: inkSoft }} numberOfLines={1}>
           {entry.note.trim() || formatRelativeDay(entry.day)}
@@ -2172,25 +2190,27 @@ const styles = StyleSheet.create({
   pinnedWho: {
     fontSize: 11,
   },
-  balanceStrip: {
+  headerTitle: {
+    flexShrink: 1,
+    justifyContent: 'center',
+  },
+  headerName: {
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: 600,
+  },
+  headerBalance: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.two,
-    borderRadius: Radius.full,
-    paddingLeft: Spacing.three,
-    paddingRight: Spacing.one,
-    paddingVertical: Spacing.one,
-    marginHorizontal: Spacing.three,
-    marginTop: Spacing.two,
+    gap: 4,
   },
-  balanceText: {
-    flex: 1,
+  headerBalanceText: {
+    flexShrink: 1,
     fontSize: 12,
+    lineHeight: 16,
   },
-  settleBtn: {
-    borderRadius: Radius.full,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: 5,
+  headerAmount: {
+    fontWeight: 700,
   },
   vanishBar: {
     flexDirection: 'row',

@@ -16,6 +16,9 @@
 --   entry_deleted  an entry deleted                             book-activity
 --   joined         someone joined the book                      book-activity
 --
+-- Approval requests for locked entries ring too, but they live with the lock
+-- in entry-safety.sql, and they ignore mute and the switches below.
+--
 -- WHO MAY SILENCE WHAT. Each install's push_tokens row carries two lists the
 -- app keeps up to date: `muted_books` (books muted on that phone) and
 -- `off_events` (switches turned off on the Notifications screen). They have to
@@ -223,6 +226,13 @@ declare
   v_amount text;
   v_paid   text;
 begin
+  -- A change the other member just approved (entry-safety.sql sets this for
+  -- the length of the approval). They've seen it; the requester hears about
+  -- it from the approval notification instead.
+  if coalesce(current_setting('spendly.approved_by', true), '') <> '' then
+    return new;
+  end if;
+
   if tg_op = 'INSERT' then
     if new.deleted then return new; end if;
     v_event := 'entry_added';   v_verb := 'added';

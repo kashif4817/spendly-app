@@ -25,6 +25,7 @@ import {
   getCurrentUserId,
   getSharedBook,
   getSharedMemberName,
+  ENTRY_SAFETY_TABLES,
   markBooksDelivered,
   SHARED_TABLES,
   type SharedMessage,
@@ -112,6 +113,17 @@ function handleChange(table: SharedTable, payload: { eventType: string; new?: an
 }
 
 /**
+ * The activity log and approval requests, on a channel of their own.
+ *
+ * Realtime refuses a whole channel when one of its tables isn't published,
+ * and these two only are once supabase/entry-safety.sql has been run. Kept
+ * apart, an app update that lands first costs nothing but these two tables'
+ * live updates — the pull still brings them — instead of every entry and
+ * message in the book.
+ */
+let safetyChannel: RealtimeChannel | null = null;
+
+/**
  * Start listening. Safe to call repeatedly; only the first call opens a socket.
  * `onResubscribe` fires once the channel is live, and should run a pull to
  * cover the gap while it was down.
@@ -119,13 +131,17 @@ function handleChange(table: SharedTable, payload: { eventType: string; new?: an
 export function startRealtime(onResubscribe: () => void): void {
   if (channel) return;
 
-  const next = supabase.channel('shared-books');
-  for (const table of SHARED_TABLES) {
-    next.on(
+  const safety = new Set<string>(ENTRY_SAFETY_TABLES);
+  const listen = (on: RealtimeChannel, table: SharedTable) =>
+    on.on(
       'postgres_changes' as any,
       { event: '*', schema: 'public', table },
       (payload: any) => handleChange(table, payload)
     );
+
+  const next = supabase.channel('shared-books');
+  for (const table of SHARED_TABLES) {
+    if (!safety.has(table)) listen(next, table);
   }
 
   // No filter is set on purpose: Realtime applies RLS per subscriber, so the
@@ -137,17 +153,24 @@ export function startRealtime(onResubscribe: () => void): void {
   });
 
   channel = next;
+
+  const extra = supabase.channel('shared-entry-safety');
+  for (const table of ENTRY_SAFETY_TABLES) listen(extra, table);
+  extra.subscribe();
+  safetyChannel = extra;
 }
 
 /** Stop listening — on sign-out, or while the app is in the background. */
 export function stopRealtime(): void {
   subscribed = false;
-  if (!channel) return;
-  const open = channel;
+  for (const open of [channel, safetyChannel]) {
+    if (!open) continue;
+    supabase.removeChannel(open).catch(() => {
+      // Already gone, or offline. Either way there's nothing left to close.
+    });
+  }
   channel = null;
-  supabase.removeChannel(open).catch(() => {
-    // Already gone, or offline. Either way there's nothing left to close.
-  });
+  safetyChannel = null;
 }
 
 /** True while a channel object exists (not necessarily connected). */

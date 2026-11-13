@@ -228,6 +228,76 @@ export type SharedEntry = {
   updated_at: string;
   /** Hand-arranged position within the day. 0 = never dragged. */
   sort: number;
+  /**
+   * When the SERVER received it — the start of its 24 free hours (see
+   * lib/entry-lock.ts). Null until it has been uploaded and pulled back, and
+   * on a project that hasn't run supabase/entry-safety.sql.
+   */
+  posted_at: string | null;
+};
+
+/**
+ * One line of a shared book's activity log: an edit, delete or restore of an
+ * entry, or a back-dated one: added for an earlier day than it was added on.
+ *
+ * Written only by the server (supabase/entry-safety.sql) and never changed,
+ * so both members read the very same record. `old_*` is the entry before the
+ * change and `new_*` after it; an add has no `old_*`.
+ */
+export type EntryLogAction = 'edited' | 'deleted' | 'restored' | 'added_late';
+
+export type SharedEntryLog = {
+  id: string;
+  book_id: string;
+  entry_id: string;
+  /** The entry's author — the only person who can change it. */
+  actor_id: string;
+  /** The other member, when the change went through a request they approved. */
+  approved_by: string | null;
+  action: EntryLogAction;
+  old_amount: number | null;
+  old_note: string | null;
+  old_day: string | null;
+  old_payer_id: string | null;
+  new_amount: number | null;
+  new_note: string | null;
+  new_day: string | null;
+  new_payer_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/**
+ * A request to change or delete an entry past its 24 free hours, waiting on
+ * the other member. It carries the exact change, so approving applies that
+ * and nothing else. Created and answered only through server functions (see
+ * sync/entry-requests.ts); pulled here like any other shared row.
+ */
+export type EntryRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled' | 'expired';
+
+export type SharedEntryRequest = {
+  id: string;
+  book_id: string;
+  entry_id: string;
+  requester_id: string;
+  kind: 'edit' | 'delete';
+  old_amount: number;
+  old_note: string;
+  old_day: string;
+  old_payer_id: string;
+  /** Null for a delete. */
+  new_amount: number | null;
+  new_note: string | null;
+  new_day: string | null;
+  new_payer_id: string | null;
+  status: EntryRequestStatus;
+  /** Why it was turned down, when the other member said. */
+  reason: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
 };
 
 /**
@@ -344,6 +414,8 @@ export type SharedBookSummary = {
   pending: boolean;
   /** Messages from the other member that you haven't read yet. */
   unread: number;
+  /** The other member's change requests waiting on your answer. */
+  awaitingApproval: number;
 };
 
 /** Sentinel category for the overall (all-spending) monthly budget. */
@@ -414,6 +486,9 @@ export type SyncTable = (typeof SYNC_TABLES)[number];
  * one and rotating a code all run as server-side functions, so there is
  * nothing else for a client to upload — which also means one less way to trip
  * over RLS. Entries, chat messages and read markers go both ways.
+ *
+ * The activity log and approval requests are pulled only, too: the log is
+ * written by a server trigger, requests by server functions.
  */
 export const SHARED_TABLES = [
   'shared_books',
@@ -422,7 +497,16 @@ export const SHARED_TABLES = [
   'shared_messages',
   'shared_reactions',
   'shared_reads',
+  'shared_entry_log',
+  'shared_entry_requests',
 ] as const;
+
+/**
+ * The tables supabase/entry-safety.sql adds. Realtime listens to them on a
+ * channel of their own, so a project that hasn't run that file yet can't take
+ * the rest of the live updates down with it.
+ */
+export const ENTRY_SAFETY_TABLES = ['shared_entry_log', 'shared_entry_requests'] as const;
 
 export type SharedTable = (typeof SHARED_TABLES)[number];
 
@@ -440,8 +524,10 @@ export const SHARED_TABLE_COLUMNS: Record<SharedTable, string[]> = {
     'created_at',
   ],
   shared_book_members: ['book_id', 'user_id', 'joined_at'],
+  // `posted_at` is the server's to write: pulled, never uploaded (see
+  // SERVER_COLUMNS in sync/engine.ts).
   shared_entries: [
-    'book_id', 'author_id', 'payer_id', 'amount', 'note', 'day', 'created_at', 'sort',
+    'book_id', 'author_id', 'payer_id', 'amount', 'note', 'day', 'created_at', 'sort', 'posted_at',
   ],
   shared_messages: [
     'book_id',
@@ -458,6 +544,19 @@ export const SHARED_TABLE_COLUMNS: Record<SharedTable, string[]> = {
   ],
   shared_reactions: ['book_id', 'message_id', 'user_id', 'emoji', 'created_at'],
   shared_reads: ['book_id', 'user_id', 'delivered_at', 'last_read_at'],
+  shared_entry_log: [
+    'book_id', 'entry_id', 'actor_id', 'approved_by', 'action',
+    'old_amount', 'old_note', 'old_day', 'old_payer_id',
+    'new_amount', 'new_note', 'new_day', 'new_payer_id',
+    'created_at',
+  ],
+  shared_entry_requests: [
+    'book_id', 'entry_id', 'requester_id', 'kind',
+    'old_amount', 'old_note', 'old_day', 'old_payer_id',
+    'new_amount', 'new_note', 'new_day', 'new_payer_id',
+    'status', 'reason', 'decided_by', 'decided_at', 'expires_at',
+    'created_at',
+  ],
 };
 
 /**
@@ -476,6 +575,9 @@ export const SHARED_OWNER_COLUMN: Record<SharedTable, string> = {
   shared_messages: 'sender_id',
   shared_reactions: 'user_id',
   shared_reads: 'user_id',
+  // Never pushed — listed only so every shared table has an answer.
+  shared_entry_log: 'actor_id',
+  shared_entry_requests: 'requester_id',
 };
 
 export function isSharedTable(table: AnyTable): table is SharedTable {
@@ -534,7 +636,7 @@ export function getCurrentUserId(): string | null {
 // live-refresh hook (see db/hooks.ts).
 const db = SQLite.openDatabaseSync('expenses.db', { enableChangeListener: true });
 
-const DATABASE_VERSION = 16;
+const DATABASE_VERSION = 17;
 
 let dbInitError: string | null = null;
 
@@ -587,6 +689,33 @@ function createMetaTables(): void {
   if (!hasColumn('sync_state', 'shared_pulled_at')) {
     db.execSync('ALTER TABLE sync_state ADD COLUMN shared_pulled_at TEXT');
   }
+
+  // A cursor of their own for tables that mustn't share the lane's. See
+  // pullOnOwnCursor in sync/shared.ts. Here, not in a versioned step, so a
+  // database already at the current version still gains it.
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS sync_cursors (
+      table_name TEXT PRIMARY KEY NOT NULL,
+      cursor TEXT
+    );
+  `);
+}
+
+/** How far a table on its own cursor has been pulled, or null for "from the start". */
+export function getTableCursor(table: string): string | null {
+  const row = db.getFirstSync<{ cursor: string | null }>(
+    'SELECT cursor FROM sync_cursors WHERE table_name = ?',
+    table
+  );
+  return row?.cursor ?? null;
+}
+
+export function setTableCursor(table: string, cursor: string | null): void {
+  db.runSync(
+    `INSERT INTO sync_cursors (table_name, cursor) VALUES (?, ?)
+     ON CONFLICT(table_name) DO UPDATE SET cursor = excluded.cursor`,
+    table, cursor
+  );
 }
 
 /** The five synced data tables, with UUID ids + user_id + updated_at. */
@@ -711,6 +840,73 @@ function createSharedTables(): void {
     );
   `);
   createChatTables();
+  addEntrySafetyTables();
+}
+
+/**
+ * The 24-hour lock, the activity log and approval requests (v16 → v17).
+ *
+ * Every column on the two new tables is nullable apart from the keys: they
+ * are filled only by pulls, and a pull binds null for anything the server
+ * leaves out. `activity_seen` is this device's own — how far down a book's
+ * log you have read — and never syncs.
+ */
+function addEntrySafetyTables(): void {
+  if (!hasColumn('shared_entries', 'posted_at')) {
+    db.execSync('ALTER TABLE shared_entries ADD COLUMN posted_at TEXT');
+  }
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS shared_entry_log (
+      id TEXT PRIMARY KEY NOT NULL,
+      book_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL,
+      actor_id TEXT,
+      approved_by TEXT,
+      action TEXT,
+      old_amount REAL,
+      old_note TEXT,
+      old_day TEXT,
+      old_payer_id TEXT,
+      new_amount REAL,
+      new_note TEXT,
+      new_day TEXT,
+      new_payer_id TEXT,
+      created_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_shared_entry_log_book ON shared_entry_log(book_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_shared_entry_log_entry ON shared_entry_log(entry_id);
+
+    CREATE TABLE IF NOT EXISTS shared_entry_requests (
+      id TEXT PRIMARY KEY NOT NULL,
+      book_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL,
+      requester_id TEXT,
+      kind TEXT,
+      old_amount REAL,
+      old_note TEXT,
+      old_day TEXT,
+      old_payer_id TEXT,
+      new_amount REAL,
+      new_note TEXT,
+      new_day TEXT,
+      new_payer_id TEXT,
+      status TEXT,
+      reason TEXT,
+      decided_by TEXT,
+      decided_at TEXT,
+      expires_at TEXT,
+      created_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_shared_entry_requests_book ON shared_entry_requests(book_id);
+    CREATE INDEX IF NOT EXISTS idx_shared_entry_requests_entry ON shared_entry_requests(entry_id);
+
+    CREATE TABLE IF NOT EXISTS activity_seen (
+      book_id TEXT PRIMARY KEY NOT NULL,
+      seen_at TEXT NOT NULL
+    );
+  `);
 }
 
 /**
@@ -1071,7 +1267,7 @@ export function migrate(): void {
     // Fresh install → create the current schema directly. Preset categories are
     // NOT seeded here; they're seeded into a brand-new account on sign-up.
     createDataTables();
-    version = 16;
+    version = 17;
   } else {
     if (version < 4) {
       // Existing pre-sync database (integer ids) → migrate its data to the
@@ -1157,6 +1353,14 @@ export function migrate(): void {
       // ordinary chat, which is what a null kind means — nothing to backfill.
       addChatColumns();
       version = 16;
+    }
+    if (version === 16) {
+      // The 24-hour lock, the activity log and approval requests. Nothing to
+      // backfill here: the log starts empty by design, and every entry's
+      // posted_at comes down from the server (sync/shared.ts re-fetches the
+      // entries once so rows pulled before this update get theirs).
+      addEntrySafetyTables();
+      version = 17;
     }
   }
 
@@ -2367,6 +2571,9 @@ export function deleteSharedBookLocally(id: string): void {
   const stamp = nowIso();
   db.withTransactionSync(() => {
     db.runSync('DELETE FROM shared_entries WHERE book_id = ?', id);
+    db.runSync('DELETE FROM shared_entry_log WHERE book_id = ?', id);
+    db.runSync('DELETE FROM shared_entry_requests WHERE book_id = ?', id);
+    db.runSync('DELETE FROM activity_seen WHERE book_id = ?', id);
     db.runSync('DELETE FROM shared_reactions WHERE book_id = ?', id);
     db.runSync('DELETE FROM shared_messages WHERE book_id = ?', id);
     db.runSync('DELETE FROM shared_reads WHERE book_id = ?', id);
@@ -2433,6 +2640,15 @@ export type SharedEntryInput = {
 };
 
 /**
+ * The longest note the server accepts on a shared entry (entry-safety.sql).
+ * Cut here rather than refused there: a refused row would sit in the outbox
+ * for ever, and a note from a pasted chat message can easily run long.
+ */
+export const SHARED_NOTE_MAX = 1000;
+
+const clampNote = (note: string | undefined) => (note ?? '').slice(0, SHARED_NOTE_MAX);
+
+/**
  * Add an entry to a shared book. `author_id` is always you (the server enforces
  * that), while `payer_id` may be either member — that's how you record "he paid
  * for me" without needing him to be online.
@@ -2445,18 +2661,23 @@ export function addSharedEntry(input: SharedEntryInput): string {
        (id, book_id, author_id, payer_id, amount, note, day, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id, input.bookId, currentUserId ?? '', input.payerId, input.amount,
-    input.note ?? '', input.day ?? todayKey(), updatedAt, updatedAt
+    clampNote(input.note), input.day ?? todayKey(), updatedAt, updatedAt
   );
   enqueue('shared_entries', id, 'upsert', updatedAt);
   return id;
 }
 
+/**
+ * Change an entry directly — only inside its first 24 hours. After that the
+ * server refuses, and the change goes as a request instead (see
+ * sync/entry-requests.ts); the entry screen picks the road.
+ */
 export function updateSharedEntry(id: string, input: Omit<SharedEntryInput, 'bookId'>): void {
   const updatedAt = nowIso();
   db.runSync(
     `UPDATE shared_entries SET payer_id = ?, amount = ?, note = ?, day = ?, updated_at = ?
      WHERE id = ?`,
-    input.payerId, input.amount, input.note ?? '', input.day ?? todayKey(), updatedAt, id
+    input.payerId, input.amount, clampNote(input.note), input.day ?? todayKey(), updatedAt, id
   );
   enqueue('shared_entries', id, 'upsert', updatedAt);
 }
@@ -2471,13 +2692,115 @@ export function restoreSharedEntry(entry: SharedEntry): void {
   const updatedAt = nowIso();
   db.runSync(
     `INSERT OR REPLACE INTO shared_entries
-       (id, book_id, author_id, payer_id, amount, note, day, created_at, sort, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, book_id, author_id, payer_id, amount, note, day, created_at, sort, posted_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     entry.id, entry.book_id, entry.author_id, entry.payer_id, entry.amount,
-    entry.note, entry.day, entry.created_at, entry.sort ?? 0, updatedAt
+    entry.note, entry.day, entry.created_at, entry.sort ?? 0, entry.posted_at ?? null, updatedAt
   );
   enqueue('shared_entries', entry.id, 'upsert', updatedAt);
   notifyDbChanged();
+}
+
+// --- Activity log and approval requests ---------------------------------------
+// Both tables are filled only by pulls (see supabase/entry-safety.sql). What
+// follows is reading them; nothing here writes to the server.
+
+/** A book's activity, newest first. */
+export function getEntryLog(bookId: string): SharedEntryLog[] {
+  return db.getAllSync<SharedEntryLog>(
+    'SELECT * FROM shared_entry_log WHERE book_id = ? ORDER BY created_at DESC',
+    bookId
+  );
+}
+
+/** One entry's changes, oldest first — its history read top to bottom. */
+export function getEntryHistory(entryId: string): SharedEntryLog[] {
+  return db.getAllSync<SharedEntryLog>(
+    'SELECT * FROM shared_entry_log WHERE entry_id = ? ORDER BY created_at ASC',
+    entryId
+  );
+}
+
+/** Ids of a book's entries that have been edited at least once — the "Edited" tag. */
+export function getEditedEntryIds(bookId: string): Set<string> {
+  const rows = db.getAllSync<{ entry_id: string }>(
+    `SELECT DISTINCT entry_id FROM shared_entry_log WHERE book_id = ? AND action = 'edited'`,
+    bookId
+  );
+  return new Set(rows.map((r) => r.entry_id));
+}
+
+export function getEntryRequest(id: string): SharedEntryRequest | null {
+  return db.getFirstSync<SharedEntryRequest>('SELECT * FROM shared_entry_requests WHERE id = ?', id);
+}
+
+/** A book's requests, newest first, whatever became of them. */
+export function getBookRequests(bookId: string): SharedEntryRequest[] {
+  return db.getAllSync<SharedEntryRequest>(
+    'SELECT * FROM shared_entry_requests WHERE book_id = ? ORDER BY created_at DESC',
+    bookId
+  );
+}
+
+/**
+ * Requests still open, across every book. "Open" is decided in JS rather than
+ * SQL: a request nobody answered in time still reads 'pending' until the
+ * server next touches it, and `expires_at` is the server's timestamp format,
+ * which only compares safely as a parsed date.
+ */
+export function getOpenRequests(): SharedEntryRequest[] {
+  const now = Date.now();
+  return db
+    .getAllSync<SharedEntryRequest>(
+      `SELECT * FROM shared_entry_requests WHERE status = 'pending' ORDER BY created_at ASC`
+    )
+    .filter((r) => Date.parse(r.expires_at) > now);
+}
+
+/** The open request on one entry, if there is one (there is never more than one). */
+export function getOpenRequestForEntry(entryId: string): SharedEntryRequest | null {
+  return getOpenRequests().find((r) => r.entry_id === entryId) ?? null;
+}
+
+/**
+ * How many of a book's log lines this device hasn't shown you yet. Your own
+ * changes don't count: they're not news to you.
+ *
+ * The marker is the newest `created_at` you were shown, in the server's own
+ * format, so the comparison is like for like.
+ */
+export function getUnseenActivityCount(bookId: string, userId: string): number {
+  const row = db.getFirstSync<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM shared_entry_log l
+     LEFT JOIN activity_seen s ON s.book_id = l.book_id
+     WHERE l.book_id = ? AND l.actor_id <> ? AND l.created_at > COALESCE(s.seen_at, '')`,
+    bookId, userId
+  );
+  return row?.n ?? 0;
+}
+
+/** The newest log time you've been shown in a book, or '' for none. */
+export function getActivitySeenAt(bookId: string): string {
+  const row = db.getFirstSync<{ seen_at: string }>(
+    'SELECT seen_at FROM activity_seen WHERE book_id = ?',
+    bookId
+  );
+  return row?.seen_at ?? '';
+}
+
+/** You've looked at a book's activity: everything in it now counts as seen. */
+export function markActivitySeen(bookId: string): void {
+  const row = db.getFirstSync<{ newest: string | null }>(
+    'SELECT MAX(created_at) AS newest FROM shared_entry_log WHERE book_id = ?',
+    bookId
+  );
+  if (!row?.newest) return;
+  db.runSync(
+    `INSERT INTO activity_seen (book_id, seen_at) VALUES (?, ?)
+     ON CONFLICT(book_id) DO UPDATE SET seen_at = excluded.seen_at
+     WHERE excluded.seen_at > activity_seen.seen_at`,
+    bookId, row.newest
+  );
 }
 
 export function getSharedEntry(id: string): SharedEntry | null {
@@ -2612,6 +2935,12 @@ export function getSharedBookSummaries(userId: string): SharedBookSummary[] {
 
   // One query for every book's unread count, rather than one per row below.
   const unread = getUnreadCounts(userId);
+  // Same for requests waiting on YOUR answer.
+  const awaiting: Record<string, number> = {};
+  for (const request of getOpenRequests()) {
+    if (request.requester_id === userId) continue;
+    awaiting[request.book_id] = (awaiting[request.book_id] ?? 0) + 1;
+  }
 
   return books.map((book) => {
     const other = db.getFirstSync<{ user_id: string }>(
@@ -2634,6 +2963,7 @@ export function getSharedBookSummaries(userId: string): SharedBookSummary[] {
       dueDay: flags.dueDay,
       pending: !other,
       unread: unread[book.id] ?? 0,
+      awaitingApproval: awaiting[book.id] ?? 0,
     };
   });
 }
@@ -3170,6 +3500,8 @@ export function wipeLocalData(): void {
     // account signing in must not inherit the last user's shared ledgers.
     for (const table of SHARED_TABLES) db.execSync(`DELETE FROM ${table}`);
     db.execSync('DELETE FROM shared_profiles');
+    db.execSync('DELETE FROM activity_seen');
+    db.execSync('DELETE FROM sync_cursors');
     db.execSync('DELETE FROM sync_outbox');
     db.runSync(
       `UPDATE sync_state
@@ -3270,8 +3602,19 @@ function remoteIsNewer(table: AnyTable, id: string, remoteUpdatedAt: string): bo
   return new Date(remoteUpdatedAt).getTime() >= new Date(local).getTime();
 }
 
-/** Apply a batch of pulled rows for a table, resolving conflicts by last-write-wins. */
-export function applyRemoteRows(table: AnyTable, rows: RemoteRow[]): void {
+/**
+ * Apply a batch of pulled rows for a table, resolving conflicts by last-write-wins.
+ *
+ * `force` puts the server's copy back even when the local one looks newer —
+ * for a local change the server has refused for good (an edit to a locked
+ * entry), whose newer `updated_at` would otherwise keep it on this phone for
+ * ever.
+ */
+export function applyRemoteRows(
+  table: AnyTable,
+  rows: RemoteRow[],
+  { force = false }: { force?: boolean } = {}
+): void {
   if (rows.length === 0) return;
   const cols = columnsFor(table);
   const placeholders = cols.map(() => '?').join(', ');
@@ -3290,7 +3633,7 @@ export function applyRemoteRows(table: AnyTable, rows: RemoteRow[]): void {
         db.runSync(`DELETE FROM ${table} WHERE id = ?`, row.id);
         continue;
       }
-      if (!remoteIsNewer(table, row.id, row.updated_at)) continue;
+      if (!force && !remoteIsNewer(table, row.id, row.updated_at)) continue;
       // `undefined` is what a column the SERVER doesn't have yet looks like
       // after an app update lands before its SQL does. SQLite cannot bind it,
       // so without this the whole pull throws and every table stops syncing —

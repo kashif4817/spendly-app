@@ -22,6 +22,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
+import { getEntryRequest } from '@/db';
 import { isBookMuted } from '@/lib/muted-books';
 import { isNotifyEnabled } from '@/lib/notification-prefs';
 
@@ -116,22 +117,54 @@ function claimPresented(messageId: string): void {
 /**
  * What a notification's data carries.
  *
- *   type     — 'chat' and 'book' for shared books, 'reminder' for the daily
- *              nudge, 'test' for the test button.
- *   event    — which kind of shared-book notification, matching the switches
- *              in lib/notification-prefs.ts. Older local ones carry none.
- *   local    — raised on this phone by the realtime path, not pushed.
+ *   type      — 'chat' and 'book' for shared books, 'approval' for a change
+ *               request on a locked entry, 'reminder' for the daily nudge,
+ *               'test' for the test button.
+ *   event     — which kind of shared-book notification, matching the switches
+ *               in lib/notification-prefs.ts. Older local ones carry none.
+ *               For approvals: 'approval' (you're asked) or 'approval_result'.
+ *   local     — raised on this phone by the realtime path, not pushed.
+ *   requestId — the approval request, on 'approval' notifications.
  */
 type NotificationData = {
   type?: string;
   event?: string;
   bookId?: string;
   messageId?: string;
+  requestId?: string;
   local?: boolean;
 };
 
+/**
+ * Approval requests the in-app pop-up has already put in front of you.
+ *
+ * A request reaches a foregrounded app twice — as a row (which opens the
+ * pop-up, see components/entry-request-popup.tsx) and as the server's push.
+ * Whichever is second stays quiet.
+ */
+const approvalsShown = new Set<string>();
+
+/** Claim a request as shown. True if this call was the first to do so. */
+export function claimApprovalShown(requestId: string): boolean {
+  if (approvalsShown.has(requestId)) return false;
+  if (approvalsShown.size >= PRESENTED_CAP) approvalsShown.clear();
+  approvalsShown.add(requestId);
+  return true;
+}
+
 /** True when a shared-book notification should arrive without a sound or a banner. */
 function staysQuiet(data: NotificationData): boolean {
+  // Asked for your approval, or told how your own request went. These ignore
+  // mute and the per-kind switches by design — a request nobody hears about
+  // is an entry frozen for a week — so the only quiet case is "already shown".
+  if (data.type === 'approval') {
+    if (!data.requestId || data.event !== 'approval') return false;
+    // A request you're being ASKED about: if its row is already on this
+    // phone, the pop-up has it (or is about to) — one announcement is enough.
+    // An answer to YOUR request is never in a pop-up, so it always shows.
+    const first = claimApprovalShown(data.requestId);
+    return !first || !!getEntryRequest(data.requestId);
+  }
   if (data.type !== 'chat' && data.type !== 'book') return false;
   const book = data.bookId;
   if (!book) return false;
@@ -144,7 +177,9 @@ function staysQuiet(data: NotificationData): boolean {
   if (isBookMuted(book)) return true;
   // Already looking at it.
   if (data.type === 'chat' && book === activeChatBook) return true;
-  if (data.type === 'book' && book === activeBook) return true;
+  // Not a balance reminder, though: it changes nothing in the book, so the
+  // screen has nothing to show for it and the banner is the only way it lands.
+  if (data.type === 'book' && book === activeBook && event !== 'reminder') return true;
 
   // The same message by both paths: shown once. A LOCAL notification has
   // already claimed its id (presentChatMessage does that before raising it),
@@ -168,7 +203,8 @@ Notifications.setNotificationHandler({
       shouldShowList: !quiet,
       // The daily reminder stays silent (it's a nudge, not news); something
       // the other member did in a shared book is news.
-      shouldPlaySound: !quiet && (data.type === 'chat' || data.type === 'book'),
+      shouldPlaySound:
+        !quiet && (data.type === 'chat' || data.type === 'book' || data.type === 'approval'),
       shouldSetBadge: false,
     };
   },

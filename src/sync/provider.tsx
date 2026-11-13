@@ -64,6 +64,14 @@ type SyncStatus = 'idle' | 'syncing' | 'offline';
 type SyncContextValue = {
   /** False until the initial session restore has finished. */
   ready: boolean;
+  /**
+   * The signed-in account's id, as React state. Screens can read
+   * `getCurrentUserId()` because they only mount once someone is signed in;
+   * anything mounted at the ROOT renders before that, and a module variable
+   * read there is stale — the React Compiler keeps the first answer. Those
+   * read this instead.
+   */
+  userId: string | null;
   /** Signed-in email, or null when signed out. */
   email: string | null;
   /** Signed-in user's display name (from Google), or null. */
@@ -117,6 +125,7 @@ const metaString = (user: User, ...keys: string[]): string | null => {
 
 export function SyncProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const [name, setName] = useState<string | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
@@ -235,6 +244,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
    */
   const applyIdentity = useCallback((user: User) => {
     setCurrentUserId(user.id);
+    setUserId(user.id);
     // Shared books go live as soon as we know who we are. Realtime only
     // delivers what RLS allows, so the session must be in place first.
     startRealtime(() => {
@@ -446,6 +456,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
       await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
     }
     setCurrentUserId(null);
+    setUserId(null);
     googlePicture.current = null;
     setEmail(null);
     setName(null);
@@ -455,6 +466,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
 
   const value: SyncContextValue = {
     ready,
+    userId,
     email,
     name,
     avatarUrl,

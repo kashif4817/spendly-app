@@ -35,22 +35,27 @@ import {
   getBookFlags,
   getBookMembers,
   getCurrentUserId,
+  getEditedEntryIds,
+  getOpenRequests,
   getSharedBalance,
   getSharedBook,
   getPendingRowIds,
   getSharedEntries,
   getSharedMemberName,
   getUnreadCount,
+  getUnseenActivityCount,
   reorderSharedDay,
   setBookArchived,
   setBookPinned,
 } from '@/db';
+import { AwaitingMark, EditedTag, RequestBar } from '@/components/entry-safety';
 import { useQuery } from '@/db/hooks';
 import { useBookMuted } from '@/hooks/use-book-muted';
 import { useTheme } from '@/hooks/use-theme';
 import { formatTime, groupByDay } from '@/lib/date';
 import { confirm, notify } from '@/lib/confirm';
 import { bookScope } from '@/lib/balance-privacy';
+import { remindAboutBook } from '@/lib/balance-reminder';
 import { formatMoney } from '@/lib/money';
 import { setBookMuted } from '@/lib/muted-books';
 import { setActiveBook } from '@/lib/notifications';
@@ -131,6 +136,21 @@ export default function SharedBookScreen() {
    * reads lives in the same database, so this re-runs on its own.
    */
   const unread = useQuery(() => getUnreadCount(bookId, me), [bookId, me]);
+
+  /**
+   * The safety layer (supabase/entry-safety.sql): which entries were changed
+   * after they were added, change requests still waiting for an answer, and
+   * how much of the activity log you haven't looked at yet.
+   */
+  const edited = useQuery(() => getEditedEntryIds(bookId), [bookId]);
+  const openRequests = useQuery(
+    () => getOpenRequests().filter((r) => r.book_id === bookId),
+    [bookId]
+  );
+  const awaitingIds = useMemo(() => new Set(openRequests.map((r) => r.entry_id)), [openRequests]);
+  const unseenActivity = useQuery(() => getUnseenActivityCount(bookId, me), [bookId, me]);
+  const openActivity = () =>
+    router.push(`/shared-activity?book=${encodeURIComponent(bookId)}` as Href);
 
   /**
    * One group per day, netted from your side: what you paid in, what they paid
@@ -417,6 +437,21 @@ export default function SharedBookScreen() {
                 <MaterialIcons name="chat-bubble-outline" size={22} color={theme.text} />
                 <UnreadBadge count={unread} style={styles.headerBadge} />
               </Pressable>
+              {/* Activity sits beside the chat: both are "what the other
+                  person did", and both carry a count of what's new. */}
+              <Pressable
+                onPress={openActivity}
+                hitSlop={10}
+                style={styles.headerChat}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  unseenActivity > 0
+                    ? `Activity, ${unseenActivity} new ${unseenActivity === 1 ? 'change' : 'changes'}`
+                    : 'Activity'
+                }>
+                <MaterialIcons name="history" size={23} color={theme.text} />
+                <UnreadBadge count={unseenActivity} style={styles.headerBadge} />
+              </Pressable>
               <Pressable
                 onPress={() => refresh()}
                 disabled={checking}
@@ -503,6 +538,19 @@ export default function SharedBookScreen() {
                 </Pressable>
               )}
 
+              {/* A change request stays here until it's answered — the pop-up
+                  that announced it closes after a minute, this doesn't. */}
+              {openRequests.map((request) => (
+                <RequestBar
+                  key={request.id}
+                  request={request}
+                  me={me}
+                  onPress={() =>
+                    router.push(`/entry-request?id=${encodeURIComponent(request.id)}` as Href)
+                  }
+                />
+              ))}
+
               {/* Recording who paid only ever APPENDS a row, so it never
                   needed the balance to be confirmed first. Waiting on a sync
                   to enable these is what made the book feel slow. */}
@@ -561,22 +609,29 @@ export default function SharedBookScreen() {
                         positive={youPaid}
                         color={youPaid ? theme.money.in : theme.money.out}
                         trailing={
-                          /* Only when it hasn't gone up yet. A tick on every
-                             single row told you nothing and left the page
-                             covered in badges. */
-                          pending.has(item.id) ? (
-                            <MaterialIcons
-                              name="cloud-upload"
-                              size={13}
-                              color={theme.accentTint}
-                              accessibilityLabel="Waiting to sync"
-                            />
+                          /* The sync mark only when it hasn't gone up yet — a
+                             tick on every single row told you nothing and left
+                             the page covered in badges. "Edited" and the
+                             hourglass are the record: both phones show them. */
+                          pending.has(item.id) || edited.has(item.id) || awaitingIds.has(item.id) ? (
+                            <View style={styles.rowMarks}>
+                              {edited.has(item.id) && <EditedTag />}
+                              {awaitingIds.has(item.id) && <AwaitingMark />}
+                              {pending.has(item.id) && (
+                                <MaterialIcons
+                                  name="cloud-upload"
+                                  size={13}
+                                  color={theme.accentTint}
+                                  accessibilityLabel="Waiting to sync"
+                                />
+                              )}
+                            </View>
                           ) : undefined
                         }
+                        // Either member can open any entry: the author to
+                        // change it, both to read its history.
                         onPress={() =>
-                          item.author_id === me
-                            ? router.push(`/shared-entry?id=${encodeURIComponent(item.id)}` as Href)
-                            : setNotice('Only the person who added an entry can change it.')
+                          router.push(`/shared-entry?id=${encodeURIComponent(item.id)}` as Href)
                         }
                       />
                     </DragItem>
@@ -602,25 +657,19 @@ export default function SharedBookScreen() {
         title={book.name || 'Shared book'}
         actions={[
           {
-            // In the sheet rather than the header: chat, refresh and options
-            // already fill that row, and a fourth icon would start eating the
-            // book's name on a narrow phone.
+            // In the sheet rather than the header: chat, activity, refresh and
+            // options already fill that row, and a fifth icon would start
+            // eating the book's name on a narrow phone.
             label: 'Share balance',
             icon: 'share',
             onPress: () => void shareBookBalance(bookId),
           },
           {
-            // Opens the chat with the reminder drafted, so the words can be
-            // softened before it goes; it arrives on their phone as
-            // "… sent a balance reminder".
+            // A notification on their phone ("… sent a balance reminder"),
+            // nothing in the chat. See lib/balance-reminder.ts.
             label: 'Send a balance reminder',
             icon: 'notifications-active',
-            onPress: () =>
-              settled
-                ? notify('Nothing outstanding', 'This book is already settled up.')
-                : router.push(
-                    `/shared-chat?book=${encodeURIComponent(bookId)}&remind=1` as Href
-                  ),
+            onPress: () => remindAboutBook({ bookId, theirName: otherName, balance }),
           },
           {
             // Everything from this book on this phone: chat, reminders,
@@ -790,6 +839,12 @@ const styles = StyleSheet.create({
   inviteText: {
     flex: 1,
     gap: 2,
+  },
+  // Beside an entry's title: "Edited", the request hourglass, the sync mark.
+  rowMarks: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
   },
   // GlassButton brings the shape; this only shares the row evenly.
   actionBtn: {

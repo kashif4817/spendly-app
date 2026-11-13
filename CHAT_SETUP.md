@@ -113,6 +113,37 @@ the other member never sees what you silenced.
 Until it has been run, a balance reminder still sends — just as an ordinary
 message — and pushes go out without the per-phone filtering.
 
+### Then run `supabase/entry-safety.sql`
+
+The safety layer for shared entries. Run it after `notifications.sql` (and
+re-run that one first if you changed it); it is safe to re-run.
+
+- **24-hour lock.** For 24 hours after the server receives an entry, its author
+  can edit or delete it freely. After that the database refuses, and the
+  author sends a request instead — the exact new values, or a delete — which
+  the other member approves or turns down. Requests expire after 7 days. The
+  clock is the server's `posted_at`, never the phone's.
+- **Activity log** (`shared_entry_log`). A trigger records every edit, delete
+  and restore, and every entry added for an earlier day than it was added on
+  (Pakistan time) — a back-dated entry: who,
+  when, before and after, and who approved it. Both members read it; nobody can
+  write to it. It starts empty — changes before the file was run aren't known.
+- **Checks.** An entry's book, author and creation time can't change; whoever
+  paid must be in the book; amounts must be above zero; dates must be real;
+  notes are capped at 1,000 characters; someone who left can't edit.
+
+| Event | When | Android channel | Tap opens |
+| --- | --- | --- | --- |
+| `approval` | The other member asks to change or delete one of their entries | Shared book activity | The request |
+| `approval_result` | Your request was approved or turned down | Shared book activity | The request |
+
+These two ignore mute and the switches: a request nobody hears about is an
+entry frozen for a week.
+
+**Run it once both phones have the app version that knows about requests.**
+An older app that edits a locked entry is refused, and its edit sits in its
+outbox. The current app turns such a refusal into a request by itself.
+
 ### If you skip the push part
 
 Nothing breaks. `push_tokens` just stays empty, the trigger finds nobody to

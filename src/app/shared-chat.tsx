@@ -7,11 +7,11 @@ import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import {
   BookPickerSheet,
   ChatAmountAction,
-  ChatBalanceStrip,
   ChatBubble,
   ChatComposer,
   ChatDay,
   ChatEntryQuote,
+  ChatHeaderTitle,
   ChatJump,
   ChatNotice,
   ChatPinnedBar,
@@ -46,6 +46,7 @@ import {
   getSharedBalance,
   getSharedBook,
   getSharedBooks,
+  getEditedEntryIds,
   getSharedEntries,
   getSharedMemberName,
   getSharedMessages,
@@ -147,7 +148,7 @@ const scrollMemory = new Map<string, number>();
  * cannot — the app not running (see supabase/shared-chat.sql).
  *
  * The things it does that a general chat app cannot, because it knows what the
- * conversation is about: the balance sits above the thread and settles in one
+ * conversation is about: the balance sits under the name and settles in one
  * tap, and a message that mentions money offers to become the entry it is
  * describing (lib/money-in-text.ts).
  */
@@ -155,7 +156,7 @@ export default function SharedChatScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { refreshShared } = useSync();
-  const params = useLocalSearchParams<{ book?: string; entry?: string; remind?: string }>();
+  const params = useLocalSearchParams<{ book?: string; entry?: string }>();
   const bookId = params.book ?? '';
 
   const me = getCurrentUserId() ?? '';
@@ -179,6 +180,8 @@ export default function SharedChatScreen() {
    * in the app where two numbers for the same entry disagree.
    */
   const entries = useQuery(() => getSharedEntries(bookId), [bookId]);
+  // Entries changed after they were added — their quotes carry an "Edited" tag.
+  const editedEntries = useQuery(() => getEditedEntryIds(bookId), [bookId]);
   const entriesById = useMemo(() => {
     const map = new Map<string, SharedEntry>();
     for (const entry of entries) map.set(entry.id, entry);
@@ -785,19 +788,6 @@ export default function SharedChatScreen() {
     setAsReminder(true);
   };
 
-  /**
-   * Arriving with ?remind=1 — from "Send a balance reminder" on the book or
-   * on its row in Loans — drafts the reminder straight away. Once per visit,
-   * and only after the balance it quotes has loaded.
-   */
-  const remindOnOpen = useRef(params.remind === '1');
-  useEffect(() => {
-    if (!remindOnOpen.current || !bookId) return;
-    remindOnOpen.current = false;
-    composeReminder();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on arrival
-  }, [bookId, balance]);
-
   const clearChat = () =>
     confirm({
       title: 'Clear this chat?',
@@ -945,6 +935,17 @@ export default function SharedChatScreen() {
       <Stack.Screen
         options={{
           title: otherName ?? book.name ?? 'Chat',
+          // The balance rides under the name rather than taking a row of the
+          // thread. Left off while a vanishing session runs: that is a moment
+          // for talking, not for being handed a bill.
+          headerTitle: () => (
+            <ChatHeaderTitle
+              title={otherName ?? book.name ?? 'Chat'}
+              balance={vanish.mode !== 'on' && !!otherId ? balance : undefined}
+              theirName={theirLabel}
+              onSettle={settleUp}
+            />
+          ),
           headerRight: () => (
             <View style={styles.headerRow}>
               <Pressable
@@ -1029,13 +1030,6 @@ export default function SharedChatScreen() {
               onPress={() => goToMessage(pinnedId)}
               onClear={() => pinMessage(null)}
             />
-          )}
-
-          {/* The number the whole conversation is about, above the
-              conversation. Stood down while a vanishing session runs: that is
-              a moment for talking, not for being handed a bill. */}
-          {!selecting && vanish.mode !== 'on' && !!otherId && (
-            <ChatBalanceStrip balance={balance} theirName={theirLabel} onSettle={settleUp} />
           )}
 
           {!selecting && vanish.mode !== 'off' && (
@@ -1195,6 +1189,7 @@ export default function SharedChatScreen() {
                               entry={quoted}
                               youPaid={quoted?.payer_id === me}
                               payerName={theirLabel}
+                              edited={!!quoted && editedEntries.has(quoted.id)}
                               onTint={mine}
                               onPress={quoted ? () => openEntry(quoted.id) : undefined}
                             />
@@ -1283,6 +1278,7 @@ export default function SharedChatScreen() {
                   entry={attached}
                   youPaid={attached?.payer_id === me}
                   payerName={theirLabel}
+                  edited={!!attached && editedEntries.has(attached.id)}
                   onRemove={() => setAttachedId(null)}
                 />
               ) : undefined

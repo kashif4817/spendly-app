@@ -17,6 +17,7 @@
  * uploads itself on reconnect, exactly like the personal ledger.
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 
 import {
@@ -28,14 +29,18 @@ import {
   setBookExpiryLocally,
   setBookPinnedLocally,
   setBookVanishLocally,
+  ENTRY_SAFETY_TABLES,
   getSharedCursor,
+  getTableCursor,
   getUncachedMemberIds,
   notifyDbChanged,
   SHARED_TABLES,
   setSharedCursor,
+  setTableCursor,
   upsertSharedBook,
   upsertSharedMember,
   type SharedBook,
+  type SharedTable,
 } from '@/db';
 import { supabase } from '@/lib/supabase';
 import { foldCursors, pullTable } from '@/sync/pull';
@@ -55,6 +60,14 @@ function describe(error: { message?: string } | null): string {
   if (raw.includes('BOOK_FULL')) return 'That book already has two people in it.';
   if (raw.includes('NOT_OWNER')) return 'Only the person who created the book can change the code.';
   if (raw.includes('NOT_SIGNED_IN')) return 'You need to be signed in to do that.';
+  if (raw.includes('NOBODY_TO_REMIND')) return 'Nobody else has joined this book yet.';
+  if (raw.includes('BOOK_NOT_FOUND')) return 'This book no longer exists, or you’ve left it.';
+  if (raw.includes('SETTLED')) return 'This book is already settled up.';
+  if (raw.includes('TOO_SOON')) return 'You sent a reminder in the last hour. Give them a little time.';
+  if (raw.includes('send_balance_reminder')) {
+    return 'Balance reminders aren’t set up on the server yet. Run supabase/balance-reminder.sql.';
+  }
+  if (/network|fetch|timed? ?out/i.test(raw)) return 'You need a connection to do this.';
   if (raw.includes('expire_after') || raw.includes('vanish_state') || raw.includes('pinned_message')) {
     return 'This needs the latest chat tables. Run supabase/shared-chat.sql in Supabase.';
   }
@@ -186,6 +199,18 @@ export async function rotateJoinCode(bookId: string): Promise<string> {
 }
 
 /**
+ * Ring the other member's phone about the book's balance — a notification
+ * only, nothing in the chat (supabase/balance-reminder.sql). The server works
+ * out the figure from the synced entries, so it is the one they will see.
+ * Needs a connection; returns the amount it was about.
+ */
+export async function sendBalanceReminder(bookId: string): Promise<number> {
+  const { data, error } = await supabase.rpc('send_balance_reminder', { p_book_id: bookId });
+  if (error || !data) throw new SharedBookError(describe(error));
+  return Number((data as { amount?: number }).amount ?? 0);
+}
+
+/**
  * Leave a book: soft-delete your membership on the server, then drop the local
  * copy. The other member keeps the book and its full history.
  */
@@ -224,24 +249,85 @@ async function cacheMemberProfiles(): Promise<void> {
 }
 
 /**
+ * Every entry, once, whatever the cursor says.
+ *
+ * `posted_at` (when the server received an entry — the start of its 24 free
+ * hours) is new in this version, and an entry this phone pulled before the
+ * update came down without it. Those rows haven't changed since, so the
+ * cursor would never bring them again, and the app would treat every old
+ * entry as unlocked until the server refused an edit. One full fetch puts it
+ * right; the flag keeps it to one.
+ */
+const ENTRIES_REFETCHED_KEY = 'spendly.shared.entriesRefetched.v1';
+let entriesRefetched: boolean | null = null;
+
+async function refetchEntriesOnce(): Promise<void> {
+  if (entriesRefetched === null) {
+    entriesRefetched = (await AsyncStorage.getItem(ENTRIES_REFETCHED_KEY).catch(() => null)) === '1';
+  }
+  if (entriesRefetched) return;
+  if ((await pullTable('shared_entries', null)) === false) return; // offline: next time
+  entriesRefetched = true;
+  await AsyncStorage.setItem(ENTRIES_REFETCHED_KEY, '1').catch(() => {});
+}
+
+/**
+ * How far back each own-cursor pull reaches past its cursor. Postgres stamps
+ * a row with the time its transaction STARTED, so a row can land a moment
+ * after a newer-stamped one was already fetched; re-reading a short overlap
+ * catches it. Re-applying the same rows is a no-op.
+ */
+const OVERLAP_MS = 2 * 60 * 1000;
+
+/**
+ * Pull one table on a cursor of its own rather than the lane's shared one.
+ *
+ * The lane's cursor is the newest row seen in ANY shared table. That is fine
+ * for tables that have always been there, and wrong for the activity log and
+ * the change requests: a phone still running an older version, or pulling in
+ * the moment before supabase/entry-safety.sql landed, moved the shared cursor
+ * past log lines it had no way to fetch — and never went back for them. That
+ * is how one phone showed an entry as Edited while the other didn't. On its
+ * own cursor a table starts from the beginning the first time it can be read,
+ * and a missing table simply leaves its cursor where it was.
+ */
+async function pullOnOwnCursor(table: SharedTable): Promise<boolean> {
+  const own = getTableCursor(table);
+  const from = own ? new Date(Date.parse(own) - OVERLAP_MS).toISOString() : null;
+  const newest = await pullTable(table, from);
+  if (newest === false) return false;
+  if (newest && (!own || Date.parse(newest) > Date.parse(own))) setTableCursor(table, newest);
+  return true;
+}
+
+/**
  * Fetch everything in your books that changed since the shared cursor.
  *
  * Note the absence of any `.eq('user_id', …)`: RLS decides what you may see, so
  * asking for "all shared entries" returns exactly the ones from your books.
- * The three tables go out together — books, memberships and entries have no
- * bearing on each other's requests, and this is the pull the book screen
- * waits on, so its latency is the one the user actually feels.
+ * The tables go out together — books, memberships, entries, the activity log
+ * and the rest have no bearing on each other's requests, and this is the pull
+ * the book screen waits on, so its latency is the one the user actually feels.
  */
 export async function pullShared(): Promise<boolean> {
   const cursor = getSharedCursor();
+  const ownCursor = new Set<string>(ENTRY_SAFETY_TABLES);
 
   try {
-    const results = await Promise.allSettled(
-      SHARED_TABLES.map((table) => pullTable(table, cursor))
-    );
+    const [results, separate] = await Promise.all([
+      Promise.allSettled(
+        SHARED_TABLES.filter((table) => !ownCursor.has(table)).map((table) =>
+          pullTable(table, cursor)
+        )
+      ),
+      Promise.allSettled(ENTRY_SAFETY_TABLES.map((table) => pullOnOwnCursor(table))),
+    ]);
 
     const newest = foldCursors(cursor, results);
     if (newest === false) return false;
+    if (separate.some((r) => r.status === 'rejected' || r.value === false)) return false;
+
+    await refetchEntriesOnce();
 
     // Only worth a request when a member turned up that we have no name for.
     await cacheMemberProfiles();

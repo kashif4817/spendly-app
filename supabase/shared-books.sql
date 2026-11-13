@@ -138,7 +138,9 @@ create policy member_leave on public.shared_book_members for update to authentic
   using (user_id = auth.uid()) with check (user_id = auth.uid() and deleted);
 
 -- Entries: any member reads and adds; only the author may change or delete
--- their own. This is what stops either side quietly rewriting the record.
+-- their own, and only while still in the book. This is what stops either side
+-- quietly rewriting the record. (Old entries are locked on top of this — see
+-- entry-safety.sql.)
 drop policy if exists entry_read on public.shared_entries;
 create policy entry_read on public.shared_entries for select to authenticated
   using (public.is_book_member(book_id));
@@ -149,7 +151,8 @@ create policy entry_insert on public.shared_entries for insert to authenticated
 
 drop policy if exists entry_author_write on public.shared_entries;
 create policy entry_author_write on public.shared_entries for update to authenticated
-  using (author_id = auth.uid()) with check (author_id = auth.uid());
+  using (author_id = auth.uid() and public.is_book_member(book_id))
+  with check (author_id = auth.uid() and public.is_book_member(book_id));
 
 -- Let members see each other's name and avatar. Without this every entry your
 -- friend adds would be labelled "Unknown" — profiles is otherwise own-row only.

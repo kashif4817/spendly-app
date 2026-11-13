@@ -188,6 +188,8 @@ export default function SettingsNotificationsScreen() {
           <ThemedText type="small" themeColor="textSecondary" style={styles.footnote}>
             Only ever about your shared books, and never about something you did yourself. These
             apply to this phone. To quiet one book completely, use Mute notifications in its menu.
+            Approval requests for entries older than 24 hours always come through, even in a muted
+            book — a change waits on your answer.
           </ThemedText>
 
           {/* Everything below is here because "the reminder didn't arrive" has

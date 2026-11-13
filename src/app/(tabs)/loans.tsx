@@ -38,6 +38,7 @@ import {
   getBookMembers,
   findPerson,
   getPeople,
+  getSharedBalance,
   getSharedBookSummaries,
   mergePeople,
   renamePerson,
@@ -59,6 +60,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { useLock } from '@/lock/provider';
 import { addDays, daysSince, formatRelativeDay, todayKey } from '@/lib/date';
 import { confirm, notify } from '@/lib/confirm';
+import { remindAboutBook } from '@/lib/balance-reminder';
 import {
   bookScope,
   isBalanceCovered,
@@ -79,6 +81,9 @@ import { leaveSharedBook, renameSharedBook, SharedBookError } from '@/sync/share
 
 /** Balances this small are rounding noise, not money owed. */
 const SETTLED_EPSILON = 0.005;
+
+/** How long settling a shared book waits for the server to confirm its balance. */
+const SETTLE_CHECK_TIMEOUT_MS = 8_000;
 
 /** Which slice of people is on screen. */
 type Filter = 'all' | 'archived' | 'people' | 'shared' | 'get' | 'pay' | 'overdue' | 'settled';
@@ -169,8 +174,12 @@ type Row = PersonBalance & {
   bookId?: string;
   /** A shared book nobody has joined yet. */
   pending?: boolean;
+  /** The other member of a shared book, once someone has joined. */
+  otherName?: string | null;
   /** Unread chat messages in a shared book. */
   unread?: number;
+  /** The other member's change requests waiting on your approval. */
+  awaitingApproval?: number;
   /** Stable list key — two books could carry the same display name. */
   key: string;
 };
@@ -274,7 +283,7 @@ export default function PeopleScreen() {
   // happens to be hidden in the list below them.
   const getCovered = useBalanceCovered(TOTAL_RECEIVABLE_SCOPE);
   const payCovered = useBalanceCovered(TOTAL_PAYABLE_SCOPE);
-  const { status, refreshNow } = useSync();
+  const { status, refreshNow, refreshShared } = useSync();
   const view = usePeopleView();
   const sort = usePeopleSort();
 
@@ -306,11 +315,13 @@ export default function PeopleScreen() {
       pinned: book.pinned,
       archived: book.archived,
       dueDay: book.dueDay,
-      // A book has a chat; a reminder goes there rather than to a number.
+      // A book reminds through the app's own notification, not a number.
       phone: '',
       bookId: book.id,
       pending: book.pending,
+      otherName: book.otherName,
       unread: book.unread,
+      awaitingApproval: book.awaitingApproval,
       key: `book:${book.id}`,
     }));
 
@@ -527,6 +538,11 @@ export default function PeopleScreen() {
    * mis-aimed swipe should cost one tap to put back.
    */
   const settle = (row: Row) => {
+    if (row.bookId) {
+      void settleBook(row.bookId, row.person);
+      return;
+    }
+
     const amount = Math.abs(row.balance);
     if (amount < SETTLED_EPSILON) return;
 
@@ -541,23 +557,6 @@ export default function PeopleScreen() {
       message,
       confirmLabel: 'Record it',
       onConfirm: () => {
-        if (row.bookId) {
-          const bookId = row.bookId;
-          const otherId = getBookMembers(bookId).find((m) => m.user_id !== me)?.user_id ?? null;
-          if (!otherId) {
-            setNotice('Nobody has joined this book yet.');
-            return;
-          }
-          const entryId = addSharedEntry({
-            bookId,
-            payerId: owesYou ? otherId : me,
-            amount,
-            note: 'Settled up',
-          });
-          offerUndo('Settled up', () => deleteSharedEntry(entryId));
-          return;
-        }
-
         const entryId = addLedgerEntry({
           person: row.person,
           direction: owesYou ? 'took' : 'gave',
@@ -571,6 +570,64 @@ export default function PeopleScreen() {
           deleteLedgerEntry(entryId);
           if (hadDue) setPersonDue(row.person, hadDue);
         });
+      },
+    });
+  };
+
+  /**
+   * Settle a shared book — on a balance the server has just confirmed, never
+   * on the copy this list was drawn from.
+   *
+   * The other member may have added entries this phone hasn't pulled yet, and
+   * settling turns the balance into a real payment both of you will see. The
+   * book screen's Settle up has always waited for a fresh balance; this one
+   * now does too, and it settles the balance it fetched.
+   */
+  const settleBook = async (bookId: string, person: string) => {
+    const otherId = getBookMembers(bookId).find((m) => m.user_id !== me)?.user_id ?? null;
+    if (!otherId) {
+      setNotice('Nobody has joined this book yet.');
+      return;
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const fresh = await Promise.race([
+      refreshShared(true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), SETTLE_CHECK_TIMEOUT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!fresh) {
+      notify(
+        'Couldn’t check the balance',
+        'Settling records a real payment, so it needs the latest balance from the server. Connect to the internet and try again.'
+      );
+      return;
+    }
+
+    const balance = getSharedBalance(bookId, me);
+    const amount = Math.abs(balance);
+    if (amount < SETTLED_EPSILON) {
+      notify('Already settled', `The book with ${person} is already settled up.`);
+      return;
+    }
+
+    const owesYou = balance > 0;
+    confirm({
+      title: `Settle up with ${person}?`,
+      message: owesYou
+        ? `Records that ${person} paid you ${formatMoney(amount)}, bringing the balance to zero. They’ll see it too.`
+        : `Records that you paid ${person} ${formatMoney(amount)}, bringing the balance to zero. They’ll see it too.`,
+      confirmLabel: 'Record it',
+      onConfirm: () => {
+        const entryId = addSharedEntry({
+          bookId,
+          payerId: owesYou ? otherId : me,
+          amount,
+          note: 'Settled up',
+        });
+        offerUndo('Settled up', () => deleteSharedEntry(entryId));
       },
     });
   };
@@ -692,11 +749,11 @@ export default function PeopleScreen() {
       setNotice('That balance is already settled.');
       return;
     }
-    // A shared book has its own chat, and a reminder sent there reaches them
-    // as a proper "… sent a balance reminder" notification — so it goes there,
-    // drafted and still editable, instead of out through the share sheet.
+    // The other member of a shared book has the app, so the reminder rings
+    // their phone directly ("… sent a balance reminder") — no chat, no share
+    // sheet.
     if (row.bookId) {
-      router.push(`/shared-chat?book=${encodeURIComponent(row.bookId)}&remind=1` as Href);
+      remindAboutBook({ bookId: row.bookId, theirName: row.otherName ?? null, balance: row.balance });
       return;
     }
     const line =
@@ -1414,7 +1471,7 @@ function PersonRow({ person, onPress, onLongPress, onMore }: RowProps & { onMore
       accessibilityRole="button"
       accessibilityLabel={`${person.person}${shared ? ', shared book' : ''}. ${label}.${
         person.unread ? ` ${person.unread} unread messages.` : ''
-      }`}>
+      }${person.awaitingApproval ? ' Your approval is needed.' : ''}`}>
       <Avatar
         initial={initial}
         color={settled ? theme.textSecondary : color}
@@ -1430,6 +1487,10 @@ function PersonRow({ person, onPress, onLongPress, onMore }: RowProps & { onMore
           <ThemedText type="smallBold" numberOfLines={1} style={styles.personName}>
             {person.person}
           </ThemedText>
+          {/* A change request from the other member, waiting on you. */}
+          {!!person.awaitingApproval && (
+            <MaterialIcons name="lock-clock" size={15} color={theme.accent} />
+          )}
         </View>
         <View style={styles.standingRow}>
           <ThemedText
@@ -1504,9 +1565,14 @@ function PersonTile({ person, onPress, onLongPress }: RowProps) {
         pressed && styles.pressed,
       ]}
       accessibilityRole="button"
-      accessibilityLabel={`${person.person}${shared ? ', shared book' : ''}. ${label}.`}>
+      accessibilityLabel={`${person.person}${shared ? ', shared book' : ''}. ${label}.${
+        person.awaitingApproval ? ' Your approval is needed.' : ''
+      }`}>
       {!!person.pinned && (
         <MaterialIcons name="push-pin" size={15} color={theme.accentTint} style={styles.tilePin} />
+      )}
+      {!!person.awaitingApproval && (
+        <MaterialIcons name="lock-clock" size={16} color={theme.accent} style={styles.tileAwaiting} />
       )}
       <Avatar
         initial={initial}
@@ -1855,6 +1921,11 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: Spacing.two,
     right: Spacing.two,
+  },
+  tileAwaiting: {
+    position: 'absolute',
+    top: Spacing.two,
+    left: Spacing.two,
   },
   tileName: {
     fontSize: 15,

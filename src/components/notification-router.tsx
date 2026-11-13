@@ -4,21 +4,28 @@ import { useEffect, useRef } from 'react';
 
 import { useSync } from '@/sync/provider';
 
-type NotificationData = { type?: string; bookId?: string };
+type NotificationData = { type?: string; bookId?: string; requestId?: string };
 
 /**
  * Where each kind of notification leads:
  *
- *   chat     — a message, a balance reminder or a reaction → that book's chat
- *   book     — an entry added, edited or deleted, or someone joining → the
- *              book itself, where the change is (a deleted entry has nowhere
- *              else to be shown)
+ *   chat     — a message, a reminder sent as a message, or a reaction → that
+ *              book's chat
+ *   book     — an entry added, edited or deleted, someone joining, or a
+ *              balance reminder (supabase/balance-reminder.sql) → the book
+ *              itself, where the change is (a deleted entry has nowhere else
+ *              to be shown)
+ *   approval — a change request on a locked entry, or the answer to yours →
+ *              the request, where it can be approved or turned down
  *   reminder — the daily nudge to log spending → straight to "Add expense"
  *
  * Anything else (the test notification) just opens the app.
  */
 function destinationOf(data: NotificationData | undefined): Href | null {
   if (data?.type === 'reminder') return '/entry' as Href;
+  if (data?.type === 'approval' && data.requestId) {
+    return `/entry-request?id=${encodeURIComponent(data.requestId)}` as Href;
+  }
   if (!data?.bookId) return null;
   const book = encodeURIComponent(data.bookId);
   if (data.type === 'chat') return `/shared-chat?book=${book}` as Href;

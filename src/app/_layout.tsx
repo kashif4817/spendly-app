@@ -9,6 +9,7 @@ import { AnimatedSplash } from '@/components/animated-splash';
 import { AuthGate } from '@/components/auth-gate';
 import { BalancePinHost } from '@/components/balance-pin-host';
 import { ConfirmHost } from '@/components/confirm-host';
+import { EntryRequestPopup } from '@/components/entry-request-popup';
 import { AuroraBackground, SceneBackground } from '@/components/glass';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { NotificationRouter } from '@/components/notification-router';
@@ -126,6 +127,8 @@ export default function RootLayout() {
                       <Stack.Screen name="shared-book" options={{ title: 'Shared book' }} />
                       <Stack.Screen name="shared-entry" options={{ presentation: 'modal', title: 'Add shared entry' }} />
                       <Stack.Screen name="shared-chat" options={{ title: 'Chat' }} />
+                      <Stack.Screen name="shared-activity" options={{ title: 'Activity' }} />
+                      <Stack.Screen name="entry-request" options={{ title: 'Approval request' }} />
                     </Stack>
                   </LockGate>
                 </AuthGate>
@@ -135,6 +138,9 @@ export default function RootLayout() {
                 {/* Renders nothing; opens the thread a tapped chat notification
                     was about, including when the tap launched the app. */}
                 <NotificationRouter />
+                {/* The other member asking to change a locked entry. Hidden
+                    while the app is locked, and closes itself after a minute. */}
+                <EntryRequestPopup />
                 {/* Above the toast and the banner: a question is the one thing
                     that should sit over everything else. */}
                 {/* The PIN ask for a covered balance. Below ConfirmHost, which
